@@ -1,1 +1,256 @@
-# WILP
+# YOLOrtho: A Unified Framework for Teeth Enumeration and Dental Disease Detection
+
+Implementation of the paper:
+> **YOLOrtho: A Unified Framework for Teeth Enumeration and Dental Disease Detection**  
+> Shenxiao Mei, Chenglong Ma, Feihong Shen, Huikai Wu, Kaidi Shen — Chohotech Inc.  
+> arXiv: https://arxiv.org/abs/2308.05967
+
+---
+
+## What This Implements
+
+| Paper Section | Code Location | Description |
+|---|---|---|
+| §2.1 Model Overall | `src/models/yolortho.py` | YOLOv8x + modifications |
+| §2.2 CoordConv | `src/models/coord_conv.py` | Position-aware convolution |
+| §2.1 Modified FPN | `src/models/yolortho.py` | Extra upsampling: strides 4,8,16 |
+| §2.2 Attribute Heads | `src/models/heads.py` | 4 disease binary classifiers |
+| §2.2 Hierarchical Loss | `src/training/loss.py` | Data-type–masked loss computation |
+| §2.1 Flip Augmentation | `src/data/augmentation.py` | Quadrant-aware horizontal flip |
+| §2.1 Data Preprocessing | `src/data/preprocess.py` | COCO JSON → YOLO format |
+| §2.1 Pseudo Labeling | `src/data/pseudo_label.py` | Healthy teeth labeling for Part 3 |
+| §2.3 Post-Processing | `src/inference/postprocess.py` | Linear sum assignment for FDI |
+
+---
+
+## Architecture
+
+```
+Input: Panoramic X-ray (1280×640)
+  │
+  ▼
+Backbone: YOLOv8x + CoordConv          (strides 4, 8, 16, 32)
+  │
+  ▼
+Neck: Modified PANet FPN               (extra upsampling → strides 4, 8, 16)
+  │
+  ├──► Detection Head                  (32 FDI tooth classes + bbox)
+  └──► 4 × Attribute Heads             (is_impacted, has_caries, has_deepcaries, has_lesion)
+  │
+  ▼
+Post-Processing: Linear Sum Assignment  (1 unique FDI per detection)
+  │
+  ▼
+Output: Structured tooth detections with disease flags
+```
+
+---
+
+## Dataset
+
+- **Source**: Dentex Challenge 2023 (local folder — no download required)
+- **Dataset root**: `D:\WILP\sem-4\Dataset\DENTEX\DENTEXsample` (or your local path)
+- **3 annotated training parts + unlabelled images + official validation set**:
+
+| Folder | JSON Annotation File | Schema | data_type |
+|---|---|---|---|
+| `training_data/quadrant/xrays/` | `train_quadrant.json` | `images, annotations, categories` | 0 |
+| `training_data/quadrant_enumeration/xrays/` | `train_quadrant_enumeration.json` | `images, annotations, categories_1, categories_2` | 1 |
+| `training_data/quadrant-enumeration-disease/xrays/` | `train_quadrant_enumeration_disease.json` | `images, annotations, categories_1, categories_2, categories_3` | 2 |
+| `training_data/unlabelled/xrays/` | *(none)* | Raw images, pseudo-labeled at runtime | 2 |
+| `validation_data/quadrant_enumeration_disease/xrays/` | `validation_triple.json` | Same as Part 3 | 2 |
+| `test_data/disease/input/` | per-image LabelMe JSONs | LabelMe polygon format | — |
+
+**JSON key differences across parts:**
+- Part 1: uses `categories` (single), `category_id` in annotations
+- Part 2: uses `categories_1` (quadrant 1-4) + `categories_2` (position 1-8), `category_id_1`/`category_id_2`
+- Part 3 + Validation: adds `categories_3` (disease names), `category_id_3`
+
+**`categories_3` disease mapping:**
+
+| id | name | Attribute flag |
+|---|---|---|
+| 0 | Impacted | `is_impacted` |
+| 1 | Caries | `has_caries` |
+| 2 | Periapical Lesion | `has_lesion` |
+| 3 | Deep Caries | `has_deepcaries` |
+
+---
+
+## Setup & Installation
+
+### 1. Clone and install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Point to the DENTEX dataset folder
+No download needed. The dataset is expected on local disk. Pass `--dentex-root` when running.
+```bash
+# Example path (adjust to your local path)
+--dentex-root D:/WILP/sem-4/Dataset/DENTEX/DENTEXsample
+```
+
+---
+
+## Running the Pipeline
+
+### Full pipeline (recommended)
+```bash
+python main.py --mode full --device cuda --dentex-root D:/WILP/sem-4/Dataset/DENTEX/DENTEXsample
+```
+
+> **No GPU?** Replace `--device cuda` with `--device cpu`, or omit `--device` entirely (auto-detects and falls back to CPU):
+> ```bash
+> python main.py --mode full --device cpu --dentex-root D:/WILP/sem-4/Dataset/DENTEX/DENTEXsample
+> ```
+
+### Step-by-step
+```bash
+# Step 1: Preprocess — convert COCO JSON → YOLO format
+python main.py --mode preprocess --dentex-root D:/WILP/sem-4/Dataset/DENTEX/DENTEXsample
+# Creates: data/processed/ (train/ + val/ from validation_triple.json + test/)
+# Also copies: data/unlabelled/ for pseudo labeling
+
+# Step 2: Train Phase 1 (detection only)
+python main.py --mode train --device cuda   # or --device cpu if no GPU
+
+# Step 3: Generate pseudo labels for healthy teeth
+python main.py --mode pseudo_label
+# Processes: Part 3 images (adds non-disease detections)
+# Processes: data/unlabelled/ images (all detections → healthy pseudo labels)
+
+# Step 4: Re-train with pseudo labels + disease attribute heads
+python main.py --mode train --device cuda   # or --device cpu if no GPU
+
+# Step 5: Evaluate on official validation set (validation_triple.json)
+python main.py --mode evaluate --weights weights/yolortho_best.pt
+
+# Step 6: Run inference on new X-rays
+python main.py --mode predict --input path/to/xray.jpg --weights weights/yolortho_best.pt
+```
+
+### Resume interrupted training
+```bash
+python main.py --mode train --resume
+```
+
+---
+
+## Project Structure
+
+```
+YOLOrtho/
+├── main.py                     # Entry point — runs all pipeline stages
+├── requirements.txt
+├── PROJECT_GUIDE.md            # Detailed step-by-step guide
+│
+├── config/
+│   ├── model_config.yaml       # Model architecture settings
+│   ├── dataset.yaml            # YOLO dataset paths + 32 FDI class names
+│   └── train_config.yaml       # Training hyperparameters
+│
+├── data/                        # Auto-created by preprocess stage
+│   ├── processed/               # YOLO-format converted dataset
+│   │   ├── images/{train,val,test}/
+│   │   └── labels/{train,val,test}/  # 10-column extended YOLO .txt files
+│   ├── pseudo/                  # After pseudo_label stage
+│   └── unlabelled/              # Unlabelled images (copied by preprocess)
+│
+├── src/
+│   ├── data/
+│   │   ├── preprocess.py       # COCO JSON → YOLO label conversion (all 3 parts + val)
+│   │   ├── pseudo_label.py     # Pseudo-labeling: Part 3 healthy + unlabelled images
+│   │   ├── augmentation.py     # Flip + quadrant remapping augmentation
+│   │   └── dataset.py          # PyTorch Dataset with extended labels
+│   │
+│   ├── models/
+│   │   ├── coord_conv.py       # CoordConv: add (x,y) coordinate channels
+│   │   ├── yolortho.py         # Full YOLOrtho model (wraps YOLOv8x)
+│   │   └── heads.py            # Disease attribute prediction heads
+│   │
+│   ├── training/
+│   │   ├── trainer.py          # 2-phase training orchestrator
+│   │   └── loss.py             # Hierarchical BCE + detection loss
+│   │
+│   ├── inference/
+│   │   ├── predictor.py        # End-to-end inference pipeline
+│   │   └── postprocess.py      # Linear sum assignment for FDI uniqueness
+│   │
+│   └── utils/
+│       ├── fdi.py              # FDI tooth numbering system utilities
+│       └── visualize.py        # Bounding box + dental chart visualization
+│
+├── weights/                    # Saved model weights
+└── outputs/
+    ├── runs/                   # Training logs + checkpoints
+    └── predictions/            # Inference results (images + JSON)
+```
+
+---
+
+## FDI Tooth Numbering System
+
+The FDI (Fédération Dentaire Internationale) system uses 2-digit codes:
+- **First digit**: Quadrant (1=Upper-Right, 2=Upper-Left, 3=Lower-Left, 4=Lower-Right)
+- **Second digit**: Tooth position (1=Central Incisor … 8=Wisdom Tooth)
+
+| Quadrant | FDI Range | YOLO Classes |
+|---|---|---|
+| Q1 (Upper-Right) | 11–18 | 0–7 |
+| Q2 (Upper-Left)  | 21–28 | 8–15 |
+| Q3 (Lower-Left)  | 31–38 | 16–23 |
+| Q4 (Lower-Right) | 41–48 | 24–31 |
+
+---
+
+## Results (from the paper)
+
+| Model | AP-Quadrant | AP-Diagnosis | AP-Enumeration |
+|---|---|---|---|
+| Vanilla YOLO | 0.395 | 0.330 | 0.286 |
+| **YOLOrtho** | **0.414** | **0.357** | **0.337** |
+| HierarchicalDet | 0.365 | 0.341 | 0.221 |
+
+Ablation study:
+| Upsampling | CoordConv | Post-process | AP-Q | AP-D | AP-E |
+|---|---|---|---|---|---|
+| – | – | – | 0.469 | 0.410 | 0.359 |
+| ✓ | – | – | 0.522 | 0.475 | 0.417 |
+| ✓ | ✓ | – | 0.545 | 0.494 | 0.438 |
+| ✓ | ✓ | ✓ | 0.546 | 0.494 | **0.446** |
+
+---
+
+## Key Technical Contributions
+
+### 1. CoordConv Backbone
+Standard convolutions are **translation-invariant** — they don't know WHERE in the image they're processing. For teeth enumeration, position is the primary signal (upper vs. lower, left vs. right). CoordConv appends normalized (x, y) coordinate channels before each convolution in the backbone.
+
+### 2. Modified FPN (Extra Upsampling)
+Standard YOLOv8 detects at strides [8, 16, 32]. Panoramic X-rays are wide (2400×1200px+), and teeth are relatively large. Adding an extra upsampling layer shifts detection to strides [4, 8, 16], improving localization for large/medium objects.
+
+### 3. Disease as Attributes (Multi-label)
+Instead of treating diseases as separate object classes (requiring two models), each tooth detection carries 4 binary attribute predictions. This enables end-to-end training for both tasks simultaneously.
+
+### 4. Hierarchical Training
+The 3 data parts have different annotation completeness. Losses are computed selectively:
+- `data_type=0` (quadrant only): bbox + quadrant class loss
+- `data_type=1` (enumeration): bbox + FDI class loss  
+- `data_type=2` (disease): bbox + FDI class + attribute loss
+
+### 5. Linear Sum Assignment Post-processing
+The Hungarian algorithm ensures each FDI tooth number is assigned to at most one detection, correcting the common error of assigning the same number to adjacent teeth.
+
+---
+
+## Citation
+
+```bibtex
+@article{mei2023yolortho,
+  title={YOLOrtho: A Unified Framework for Teeth Enumeration and Dental Disease Detection},
+  author={Mei, Shenxiao and Ma, Chenglong and Shen, Feihong and Wu, Huikai and Shen, Kaidi},
+  journal={arXiv preprint arXiv:2308.05967},
+  year={2023}
+}
+```
