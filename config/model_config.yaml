@@ -1,0 +1,48 @@
+# ============================================================
+# YOLOrtho Model Configuration
+# Paper: https://arxiv.org/abs/2308.05967
+# ============================================================
+
+model:
+  # Base: YOLOv8x (largest variant — best accuracy)
+  base: "yolov8x"
+
+  # Number of tooth classes using FDI numbering system
+  # FDI 11-18 (Q1), 21-28 (Q2), 31-38 (Q3), 41-48 (Q4) => 32 classes
+  num_classes: 32
+
+  # Disease attribute heads (binary classifiers per detection)
+  # Each tooth detection also predicts 4 disease attributes
+  attributes:
+    - name: "is_impacted"      # Tooth impaction (embedded in bone)
+      weight: 8.0              # BCE loss weight (same as paper)
+    - name: "has_caries"       # Tooth decay (cavity)
+      weight: 8.0
+    - name: "has_deepcaries"   # Advanced caries reaching pulp
+      weight: 8.0
+    - name: "has_lesion"       # Periapical lesion (infection at root tip)
+      weight: 8.0
+
+  # CoordConv: Replace backbone Conv layers with coordinate-aware convolution
+  # Rationale: Position is key for teeth enumeration (Q1 teeth are top-right etc.)
+  use_coordconv: true
+  coordconv_with_r: false       # Add radial coordinate channel (optional)
+
+  # Modified FPN: Add extra upsampling to detect on stride 4 (paper Section 2.1)
+  # Standard YOLOv8: strides [8, 16, 32]
+  # YOLOrtho:        strides [4,  8,  16]  — better for large teeth in panoramic X-rays
+  use_modified_fpn: true
+  fpn_strides: [4, 8, 16]
+
+  # Input image size — panoramic X-rays are wide
+  # Paper trains at standard YOLO size; panoramic standard is 2400x1200
+  # Use 1280x640 to preserve aspect ratio while fitting GPU memory
+  input_width: 1280
+  input_height: 640
+
+  # Inference confidence threshold
+  conf_threshold: 0.25
+  # NMS IoU threshold
+  iou_threshold: 0.45
+  # Max detections per image (max 32 teeth in one X-ray)
+  max_det: 32

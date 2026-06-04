@@ -1,0 +1,65 @@
+# ============================================================
+# YOLO Dataset Configuration — Dentex Challenge 2023
+# Paper: https://arxiv.org/abs/2308.05967
+# Dataset: DENTEX folder (provided locally, not downloaded)
+#
+# Validation source: validation_data/validation_triple.json
+#   (official validation set — same schema as quadrant-enumeration-disease)
+# ============================================================
+
+# Dataset paths (relative to this file or absolute)
+path: ../data/processed        # Root dataset directory
+train: images/train            # Training images
+val:   images/val              # Validation images
+test:  images/test             # Test images
+
+# Number of classes
+nc: 32
+
+# Class names using FDI tooth numbering system
+# FDI: Quadrant (1-4) × 10 + Tooth position (1-8)
+# Quadrant 1 = Upper Right, 2 = Upper Left, 3 = Lower Left, 4 = Lower Right
+# Position 1 = Central incisor ... 8 = Wisdom tooth
+names:
+  0:  "11"   # Q1 Central incisor
+  1:  "12"   # Q1 Lateral incisor
+  2:  "13"   # Q1 Canine
+  3:  "14"   # Q1 First premolar
+  4:  "15"   # Q1 Second premolar
+  5:  "16"   # Q1 First molar
+  6:  "17"   # Q1 Second molar
+  7:  "18"   # Q1 Wisdom tooth
+  8:  "21"   # Q2 Central incisor
+  9:  "22"   # Q2 Lateral incisor
+  10: "23"   # Q2 Canine
+  11: "24"   # Q2 First premolar
+  12: "25"   # Q2 Second premolar
+  13: "26"   # Q2 First molar
+  14: "27"   # Q2 Second molar
+  15: "28"   # Q2 Wisdom tooth
+  16: "31"   # Q3 Central incisor
+  17: "32"   # Q3 Lateral incisor
+  18: "33"   # Q3 Canine
+  19: "34"   # Q3 First premolar
+  20: "35"   # Q3 Second premolar
+  21: "36"   # Q3 First molar
+  22: "37"   # Q3 Second molar
+  23: "38"   # Q3 Wisdom tooth
+  24: "41"   # Q4 Central incisor
+  25: "42"   # Q4 Lateral incisor
+  26: "43"   # Q4 Canine
+  27: "44"   # Q4 First premolar
+  28: "45"   # Q4 Second premolar
+  29: "46"   # Q4 First molar
+  30: "47"   # Q4 Second molar
+  31: "48"   # Q4 Wisdom tooth
+
+# Disease attributes (per detection — binary flags appended to label)
+# Stored as extra columns in label .txt files after cx cy w h:
+# Format: class_id cx cy w h is_impacted has_caries has_deepcaries has_lesion data_type
+# data_type: 0=quadrant_only, 1=enumeration, 2=disease  (used for hierarchical loss)
+attribute_names:
+  - "is_impacted"
+  - "has_caries"
+  - "has_deepcaries"
+  - "has_lesion"

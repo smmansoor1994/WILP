@@ -1,0 +1,64 @@
+# ============================================================
+# YOLOrtho Training Hyperparameters
+# Paper: https://arxiv.org/abs/2308.05967
+# ============================================================
+
+training:
+  epochs: 1
+  batch_size: 8              # Reduce if OOM; 8 fits on 16GB GPU with 1280x640 input
+  workers: 4                 # DataLoader worker threads
+  seed: 42
+
+  # Optimizer
+  optimizer: "SGD"           # SGD or AdamW
+  lr0: 0.01                  # Initial learning rate
+  lrf: 0.01                  # Final lr = lr0 * lrf (cosine decay)
+  momentum: 0.937
+  weight_decay: 0.0005
+  warmup_epochs: 3.0
+  warmup_momentum: 0.8
+  warmup_bias_lr: 0.1
+
+  # Loss weights (from paper Section 2.2)
+  # Standard YOLOv8 losses
+  loss_box: 7.5              # Bounding box regression loss weight
+  loss_cls: 0.5              # Classification loss weight
+  loss_dfl: 1.5              # Distribution Focal Loss weight
+  # Disease attribute losses (binary cross-entropy per attribute)
+  loss_attr: 8.0             # Disease attribute loss weight (same for all 4)
+
+  # Hierarchical training flags
+  # Controls which losses are computed per data part
+  # 0 = quadrant only, 1 = quadrant+enumeration, 2 = all (with disease)
+  hierarchical: true
+
+  # Pseudo-label settings (for Part 3 healthy teeth labeling)
+  pseudo_label_conf: 0.5     # Min confidence to accept pseudo label
+  pseudo_model: null         # Path to trained model for pseudo labeling (auto-filled)
+
+  # Validation interval (evaluate every N epochs)
+  val_interval: 5
+
+  # Checkpoint saving
+  save_dir: "outputs/runs"
+  save_best: true
+  save_last: true
+
+  # Early stopping patience (epochs without improvement)
+  patience: 50
+
+augmentation:
+  # Standard augmentation
+  hsv_h: 0.015               # HSV hue augmentation (not critical for X-rays)
+  hsv_s: 0.0                 # X-rays are grayscale — no saturation aug
+  hsv_v: 0.4                 # Brightness variation (simulates exposure differences)
+  degrees: 5.0               # Rotation (small; teeth layout should stay upright)
+  translate: 0.1             # Translation
+  scale: 0.5                 # Scale jitter
+  shear: 2.0                 # Shear
+  flipud: 0.0                # No vertical flip (skull anatomy)
+  fliplr: 0.5                # Horizontal flip WITH quadrant remapping (Section 2.1)
+  mosaic: 0.0                # Disable mosaic (panoramic X-rays must not be mixed)
+  mixup: 0.0                 # Disable mixup
+  blur: 0.1                  # Random Gaussian blur (simulate motion/noise)
+  copy_paste: 0.0
