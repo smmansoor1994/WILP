@@ -113,6 +113,7 @@ def preprocess_dentex(
     for split in ("train", "val", "test"):
         (out_dir / "images" / split).mkdir(parents=True, exist_ok=True)
         (out_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
+        (out_dir / "labels_ext" / split).mkdir(parents=True, exist_ok=True)
 
     random.seed(RANDOM_SEED)
 
@@ -164,6 +165,10 @@ def preprocess_dentex(
         )
     else:
         logger.warning("Unlabelled dir not found: '%s'. Skipping.", unlabelled_src)
+
+    # Remove stale ultralytics cache files so labels are re-verified with new format
+    for _cache in (out_dir / "labels").rglob("*.cache"):
+        _cache.unlink(missing_ok=True)
 
     logger.info("Preprocessing complete. Dataset written to '%s'.", out_dir)
     _log_stats(out_dir)
@@ -226,7 +231,7 @@ def _process_part1(
         _save_sample(src_image, labels, stem, "train", out_dir)
         count += 1
 
-    logger.info("Part 1: processed %d images → 'train'.", count)
+    logger.info("Part 1: processed %d images -> 'train'.", count)
 
 
 # ─── Part 2: Quadrant + Enumeration annotations ────────────────────────────────
@@ -299,7 +304,7 @@ def _process_part2(
         _save_sample(src_image, labels, stem, "train", out_dir)
         count += 1
 
-    logger.info("Part 2: processed %d images → 'train'.", count)
+    logger.info("Part 2: processed %d images -> 'train'.", count)
 
 
 # ─── Part 3: Quadrant + Enumeration + Disease annotations ─────────────────────
@@ -448,7 +453,7 @@ def _process_triple_json(
         count += 1
 
     logger.info(
-        "'%s': processed %d images → '%s' split.", json_path.name, count, split
+        "'%s': processed %d images -> '%s' split.", json_path.name, count, split
     )
 
 
@@ -512,6 +517,7 @@ def _save_sample(
 
     dst_img = out_dir / "images" / split / f"{stem}{ext}"
     dst_lbl = out_dir / "labels" / split / f"{stem}.txt"
+    dst_lbl_ext = out_dir / "labels_ext" / split / f"{stem}.txt"
 
     # Copy image
     if src_image.exists():
@@ -519,8 +525,14 @@ def _save_sample(
     else:
         logger.warning("Source image not found: '%s'", src_image)
 
-    # Write label file (empty if no annotations — background images)
+    # Write standard 5-column YOLO labels for ultralytics (class cx cy w h)
+    yolo5_labels = [" ".join(lbl.split()[:5]) for lbl in labels]
     with open(dst_lbl, "w") as f:
+        f.write("\n".join(yolo5_labels) + ("\n" if yolo5_labels else ""))
+
+    # Write full 10-column extended labels for attribute head training
+    dst_lbl_ext.parent.mkdir(parents=True, exist_ok=True)
+    with open(dst_lbl_ext, "w") as f:
         f.write("\n".join(labels) + ("\n" if labels else ""))
 
 

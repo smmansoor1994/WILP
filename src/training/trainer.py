@@ -60,8 +60,13 @@ class YOLOrthoTrainer:
         self.train_cfg = self.cfg.get("training", {})
         self.aug_cfg = self.cfg.get("augmentation", {})
 
-        # Output directory
-        self.save_dir = Path(self.train_cfg.get("save_dir", "outputs/runs"))
+        # Project root: two levels up from config/train_config.yaml → WILP/
+        self.project_root = self.config_path.resolve().parent.parent
+
+        # Output directory — always absolute so ultralytics doesn't nest it
+        # inside its own default 'runs/detect/' folder.
+        save_dir_rel = self.train_cfg.get("save_dir", "outputs/runs")
+        self.save_dir = (self.project_root / save_dir_rel).resolve()
         self.save_dir.mkdir(parents=True, exist_ok=True)
 
     def train(self) -> None:
@@ -221,10 +226,14 @@ class YOLOrthoTrainer:
         logger.info("Attribute head parameters: %s", f"{n_attr_params:,}")
 
         # Data — use pseudo-labeled data if available, else processed
-        data_root = Path("data/pseudo") if Path("data/pseudo/images").exists() else Path("data/processed")
+        # Use absolute paths anchored to project root to avoid CWD-dependent resolution
+        pseudo_root = self.project_root / "data" / "pseudo"
+        processed_root = self.project_root / "data" / "processed"
+        data_root = pseudo_root if (pseudo_root / "images").exists() else processed_root
+        # Use extended 10-column labels (labels_ext/) for attribute head training
         dataset = YOLOrthoDataset(
             images_dir=data_root / "images" / "train",
-            labels_dir=data_root / "labels" / "train",
+            labels_dir=data_root / "labels_ext" / "train",
             img_size=(self.train_cfg.get("input_height", 640),
                       self.train_cfg.get("input_width", 1280)),
         )
@@ -335,7 +344,7 @@ class YOLOrthoTrainer:
             # Update dataset.yaml to point to pseudo-labeled data
             data_yaml = self._create_pseudo_dataset_yaml()
         else:
-            data_yaml = "config/dataset.yaml"
+            data_yaml = str(self.project_root / "config" / "dataset.yaml")
 
         return dict(
             data=data_yaml,

@@ -8,7 +8,7 @@
 # ============================================================
 
 # Dataset paths (relative to this file or absolute)
-path: ../data/processed        # Root dataset directory
+path: ../data/processed                # Root dataset directory (relative to config/)
 train: images/train            # Training images
 val:   images/val              # Validation images
 test:  images/test             # Test images
