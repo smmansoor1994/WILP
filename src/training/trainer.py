@@ -249,7 +249,11 @@ class YOLOrthoTrainer:
         scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
         attr_loss_fn = AttributeBCELoss(num_attrs=4, loss_weight=8.0)
 
-        model.train()
+        # Set train mode only on pure nn.Module components, bypassing the
+        # ultralytics YOLO wrapper whose .train() method is overridden and
+        # does not accept the bool `mode` argument that PyTorch passes internally.
+        model.base_model.model.train()
+        model.attr_heads.train()
         best_loss = float("inf")
         best_path = self.save_dir / "phase2" / "weights" / "attr_best.pt"
 
