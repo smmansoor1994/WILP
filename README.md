@@ -137,6 +137,84 @@ python main.py --mode train --resume
 
 ---
 
+## Verify on a Local Panoramic Image
+
+Use `verify_local_image.py` to run inference on any local dental X-ray and display results.
+
+### Syntax
+```powershell
+python verify_local_image.py `
+  --image   <path to panoramic X-ray (.jpg / .png)> `
+  --weights <path to .pt model weights> `
+  --device  cpu `
+  --conf    0.10 `
+  --iou     0.45 `
+  --save-dir <folder to save results> `
+  --show `
+  --no-save
+```
+
+### Example — basic run with display
+```powershell
+python verify_local_image.py `
+  --image "C:\Users\Z0046KUF\Downloads\pnmc.jpg" `
+  --weights "D:\WILP\Workingcode\models\yolortho_best_main_1epoch.pt" `
+  --device cpu `
+  --show
+```
+
+### Example — save results to a custom folder
+```powershell
+python verify_local_image.py `
+  --image "C:\Users\Z0046KUF\Downloads\pnmc.jpg" `
+  --weights "D:\WILP\Workingcode\models\yolortho_best_main_1epoch.pt" `
+  --device cpu `
+  --save-dir "C:\Users\Z0046KUF\Downloads\yolortho_results" `
+  --show
+```
+
+### Example — lower confidence to detect more teeth
+```powershell
+python verify_local_image.py `
+  --image "C:\Users\Z0046KUF\Downloads\pnmc.jpg" `
+  --weights "D:\WILP\Workingcode\models\yolortho_best_main_1epoch.pt" `
+  --device cpu `
+  --conf 0.05 `
+  --save-dir "C:\Users\Z0046KUF\Downloads\yolortho_results" `
+  --show
+```
+
+### All available options
+
+| Option | Default | Description |
+|---|---|---|
+| `--image` | *(required)* | Path to panoramic X-ray (`.jpg` / `.png`) |
+| `--weights <.pt file>` | auto-detected | Path to trained model weights `.pt` file |
+| `--device` | `cpu` | `cpu` or `cuda` (GPU) |
+| `--conf` | `0.10` | Confidence threshold — lower = more detections |
+| `--iou` | `0.45` | NMS IoU threshold |
+| `--save-dir` | `outputs/predictions/` | Custom folder to save annotated image + JSON |
+| `--output-dir` | `outputs/predictions/` | Fallback save folder (used if `--save-dir` not set) |
+| `--show` | off | Display annotated image via matplotlib |
+| `--no-save` | off | Skip saving all output files |
+
+### Auto weight search (if `--weights` is omitted)
+The script searches for weights in this order:
+1. `weights/yolortho_best.pt`
+2. `outputs/runs/phase2/weights/best.pt`
+3. `outputs/runs/phase1/weights/best.pt`
+
+### Output files
+| File | Description |
+|---|---|
+| `<name>_vis.jpg` | Annotated image with bounding boxes, FDI labels, and disease flags |
+| `<name>_result.json` | Per-tooth JSON: FDI number, confidence, bbox, disease attributes |
+
+Both files are written to `--save-dir` (or `--output-dir` if not set).  
+Use `--no-save` to suppress all file output.
+
+---
+
 ## Project Structure
 
 ```
