@@ -178,7 +178,7 @@ class YOLOrthoTrainer:
         )
 
         # Copy final weights to top-level weights/
-        final_dst = Path("weights") / "yolortho_best.pt"
+        final_dst = self.project_root / "weights" / "yolortho_best.pt"
         final_dst.parent.mkdir(exist_ok=True)
         if phase2_best.exists():
             shutil.copy2(phase2_best, final_dst)
@@ -344,7 +344,7 @@ class YOLOrthoTrainer:
         a = self.aug_cfg
 
         # Dataset: use pseudo-labeled data for phase 2 if available
-        if phase == 2 and Path("data/pseudo/images").exists():
+        if phase == 2 and (self.project_root / "data" / "pseudo" / "images").exists():
             # Update dataset.yaml to point to pseudo-labeled data
             data_yaml = self._create_pseudo_dataset_yaml()
         else:
@@ -395,15 +395,23 @@ class YOLOrthoTrainer:
         """Create a dataset.yaml pointing to the pseudo-labeled data directory."""
         import yaml as pyyaml
 
-        # Load original dataset config
-        with open("config/dataset.yaml") as f:
+        # Load original dataset config using absolute path
+        orig_yaml_path = self.project_root / "config" / "dataset.yaml"
+        with open(orig_yaml_path) as f:
             orig = pyyaml.safe_load(f)
 
-        # Update paths to point to pseudo directory
+        # Pseudo labeling only produces a 'train' split.
+        # Use absolute paths so ultralytics resolves them correctly regardless of CWD.
         pseudo_yaml = dict(orig)
-        pseudo_yaml["path"] = "../data/pseudo"
+        pseudo_train = str(self.project_root / "data" / "pseudo" / "images" / "train")
+        processed_val = str(self.project_root / "data" / "processed" / "images" / "val")
+        # Override path/train/val with absolute values; drop relative 'path' key
+        pseudo_yaml["path"] = str(self.project_root)
+        pseudo_yaml["train"] = pseudo_train
+        pseudo_yaml["val"] = processed_val
+        pseudo_yaml["test"] = str(self.project_root / "data" / "processed" / "images" / "test")
 
-        out_path = Path("config/dataset_pseudo.yaml")
+        out_path = self.project_root / "config" / "dataset_pseudo.yaml"
         with open(out_path, "w") as f:
             pyyaml.dump(pseudo_yaml, f, default_flow_style=False)
 
