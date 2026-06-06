@@ -4,7 +4,7 @@
 # ============================================================
 
 training:
-  epochs: 1
+  epochs: 100
   batch_size: 8              # Reduce if OOM; 8 fits on 16GB GPU with 1280x640 input
   workers: 4                 # DataLoader worker threads
   seed: 42
