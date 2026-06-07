@@ -251,10 +251,29 @@ class YOLOrthoTrainer:
         pseudo_root = self.project_root / "data" / "pseudo"
         processed_root = self.project_root / "data" / "processed"
         data_root = pseudo_root if (pseudo_root / "images").exists() else processed_root
-        # Use extended 10-column labels (labels_ext/) for attribute head training
+
+        # Use extended 10-column labels (labels_ext/) for attribute head training.
+        # Pseudo labels_ext is created by pseudo_label.py (must re-run if missing).
+        # Fall back to processed/labels_ext if pseudo/labels_ext is absent or empty.
+        labels_ext_dir = data_root / "labels_ext" / "train"
+        if data_root == pseudo_root and (
+            not labels_ext_dir.exists()
+            or not any(labels_ext_dir.glob("*.txt"))
+        ):
+            logger.warning(
+                "pseudo/labels_ext/train/ is missing or empty. "
+                "Falling back to processed/labels_ext/train/ for attr head training. "
+                "Re-run pseudo labeling to fix this."
+            )
+            labels_ext_dir = processed_root / "labels_ext" / "train"
+            # Also align images to processed so filenames match
+            images_dir = processed_root / "images" / "train"
+        else:
+            images_dir = data_root / "images" / "train"
+
         dataset = YOLOrthoDataset(
-            images_dir=data_root / "images" / "train",
-            labels_dir=data_root / "labels_ext" / "train",
+            images_dir=images_dir,
+            labels_dir=labels_ext_dir,
             img_size=(self.train_cfg.get("input_height", 640),
                       self.train_cfg.get("input_width", 1280)),
         )
@@ -297,9 +316,18 @@ class YOLOrthoTrainer:
 
                 optimizer.zero_grad()
 
-                # Extract FPN features by running backbone
+                # Step 1: Run frozen backbone to populate FPN hooks (no gradients needed)
+                model._fpn_features = []
                 with torch.no_grad():
-                    _, attr_outputs = model(batch_imgs)
+                    model.base_model.model(batch_imgs)
+
+                # Step 2: Detach FPN features (backbone is frozen; attrs must be separate)
+                fpn_features = [f.detach() for f in model._fpn_features if f is not None]
+                if not fpn_features:
+                    continue
+
+                # Step 3: Run attr_heads OUTSIDE no_grad so gradients flow for training
+                attr_outputs = model.attr_heads(fpn_features)
 
                 if not attr_outputs:
                     continue

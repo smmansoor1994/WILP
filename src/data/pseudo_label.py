@@ -99,10 +99,13 @@ def generate_pseudo_labels(
     # ── Process Part 3 train images ───────────────────────────────────────────
     for split in ("train", "val"):
         img_dir = data_dir / "images" / split
-        lbl_dir = data_dir / "labels" / split
-        out_lbl_dir = pseudo_dir / "labels" / split
+        lbl_dir = data_dir / "labels" / split          # 5-col standard YOLO labels
+        ext_lbl_dir = data_dir / "labels_ext" / split  # 10-col extended labels
+        out_lbl_dir = pseudo_dir / "labels" / split          # 5-col output
+        out_ext_lbl_dir = pseudo_dir / "labels_ext" / split  # 10-col output
         out_img_dir = pseudo_dir / "images" / split
         out_lbl_dir.mkdir(parents=True, exist_ok=True)
+        out_ext_lbl_dir.mkdir(parents=True, exist_ok=True)
         out_img_dir.mkdir(parents=True, exist_ok=True)
 
         # Find Part 3 label files (data_type == 2 in at least one row)
@@ -112,17 +115,15 @@ def generate_pseudo_labels(
         )
 
         for stem in part3_stems:
-            # Paths
+            ext_lbl_path = ext_lbl_dir / f"{stem}.txt"
             lbl_path = lbl_dir / f"{stem}.txt"
-            # Find matching image
             img_path = _find_image(img_dir, stem)
             if img_path is None:
                 continue
 
-            # Load existing disease labels
-            existing_labels = _load_labels(lbl_path)
+            # Load 10-col labels from labels_ext/ if available; else pad from labels/
+            existing_labels = _load_labels(ext_lbl_path if ext_lbl_path.exists() else lbl_path)
 
-            # Run detector on this image
             image = cv2.imread(str(img_path))
             if image is None:
                 continue
@@ -135,32 +136,39 @@ def generate_pseudo_labels(
                 verbose=False,
             )
 
-            # Extract detections
             pseudo = _extract_pseudo_labels(
                 results=results,
                 existing_labels=existing_labels,
                 iou_threshold=OVERLAP_IOU_THRESHOLD,
             )
 
-            # Merge existing + pseudo labels
-            merged = list(existing_labels) + pseudo
+            merged_10col = list(existing_labels) + pseudo
 
-            # Write merged label file to pseudo_dir
+            # Write 5-col to labels/ (for YOLO detection training)
             out_lbl = out_lbl_dir / f"{stem}.txt"
             with open(out_lbl, "w") as f:
-                for row in merged:
-                    f.write(" ".join(str(v) for v in row) + "\n")
+                for row in merged_10col:
+                    f.write(" ".join(str(v) for v in list(row)[:5]) + "\n")
 
-            # Symlink (or copy) image
+            # Write 10-col to labels_ext/ (for attr head training)
+            out_ext_lbl = out_ext_lbl_dir / f"{stem}.txt"
+            with open(out_ext_lbl, "w") as f:
+                for row in merged_10col:
+                    row_10 = list(row) + [0] * max(0, 10 - len(list(row)))
+                    f.write(" ".join(str(v) for v in row_10[:10]) + "\n")
+
             out_img = out_img_dir / img_path.name
             if not out_img.exists():
                 shutil.copy2(img_path, out_img)
 
-        # For non-Part 3 images, copy label and image as-is
+        # For non-Part 3 images: copy 5-col labels and 10-col labels_ext if available
         for lbl_path in lbl_dir.glob("*.txt"):
             stem = lbl_path.stem
             if stem not in part3_stems:
                 shutil.copy2(lbl_path, out_lbl_dir / lbl_path.name)
+                ext_src = ext_lbl_dir / lbl_path.name
+                if ext_src.exists():
+                    shutil.copy2(ext_src, out_ext_lbl_dir / lbl_path.name)
                 img_path = _find_image(img_dir, stem)
                 if img_path:
                     dest = out_img_dir / img_path.name
@@ -200,13 +208,17 @@ def _process_unlabelled(
 
     Since these images have no ground-truth annotations, EVERY detected tooth
     becomes a healthy pseudo label (all attribute flags = 0, data_type = 2).
-    Output images and labels are written to pseudo_dir/images/train/ and
-    pseudo_dir/labels/train/.
+
+    Writes:
+      - 5-col format to pseudo_dir/labels/train/       (for YOLO detection training)
+      - 10-col format to pseudo_dir/labels_ext/train/  (for attr head training)
     """
     out_img_dir = pseudo_dir / "images" / "train"
     out_lbl_dir = pseudo_dir / "labels" / "train"
+    out_ext_lbl_dir = pseudo_dir / "labels_ext" / "train"
     out_img_dir.mkdir(parents=True, exist_ok=True)
     out_lbl_dir.mkdir(parents=True, exist_ok=True)
+    out_ext_lbl_dir.mkdir(parents=True, exist_ok=True)
 
     image_files = [
         p for p in unlabelled_dir.glob("*")
@@ -241,10 +253,18 @@ def _process_unlabelled(
             continue
 
         stem = img_path.stem
+
+        # Write 5-col to labels/ (for YOLO detection training)
         out_lbl = out_lbl_dir / f"{stem}.txt"
         with open(out_lbl, "w") as f:
             for row in pseudo:
-                f.write(" ".join(str(v) for v in row) + "\n")
+                f.write(" ".join(str(v) for v in row[:5]) + "\n")
+
+        # Write 10-col to labels_ext/ (for attr head training)
+        out_ext_lbl = out_ext_lbl_dir / f"{stem}.txt"
+        with open(out_ext_lbl, "w") as f:
+            for row in pseudo:
+                f.write(" ".join(str(v) for v in row[:10]) + "\n")
 
         dest_img = out_img_dir / img_path.name
         if not dest_img.exists():
