@@ -108,10 +108,14 @@ def generate_pseudo_labels(
         out_ext_lbl_dir.mkdir(parents=True, exist_ok=True)
         out_img_dir.mkdir(parents=True, exist_ok=True)
 
-        # Find Part 3 label files (data_type == 2 in at least one row)
-        part3_stems = _find_part3_stems(lbl_dir)
+        # Find Part 3 label files (data_type == 2 in at least one row).
+        # MUST search labels_ext/ (10-col) — labels/ only has 5 columns so
+        # the data_type column (col 9) is never present there.
+        part3_stems = _find_part3_stems(ext_lbl_dir)
         logger.info(
-            "Found %d Part 3 images in '%s' split.", len(part3_stems), split
+            "Found %d Part 3 (disease-labeled) images in '%s' split "
+            "(searched labels_ext/).",
+            len(part3_stems), split,
         )
 
         for stem in part3_stems:
