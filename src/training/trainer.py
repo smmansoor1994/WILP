@@ -130,6 +130,8 @@ class YOLOrthoTrainer:
         else:
             logger.warning("Phase 1 best weights not found at expected path.")
 
+        self._promote_weights(phase=1)
+
     def _train_phase2(self, pretrain_weights: str) -> None:
         """Phase 2: fine-tune with disease attribute heads on all data.
 
@@ -176,6 +178,8 @@ class YOLOrthoTrainer:
         self._train_attribute_heads(
             base_weights=str(phase2_best) if phase2_best.exists() else pretrain_weights
         )
+
+        self._promote_weights(phase=2)
 
         # Copy final weights to top-level weights/
         final_dst = self.project_root / "weights" / "yolortho_best.pt"
@@ -255,7 +259,10 @@ class YOLOrthoTrainer:
         model.base_model.model.train()
         model.attr_heads.train()
         best_loss = float("inf")
+        # Save attr_best.pt both alongside phase2 weights and in top-level weights/
         best_path = self.save_dir / "phase2" / "weights" / "attr_best.pt"
+        weights_attr_path = self.project_root / "weights" / "attr_best.pt"
+        weights_attr_path.parent.mkdir(exist_ok=True)
 
         for epoch in range(epochs):
             epoch_loss = 0.0
@@ -316,16 +323,16 @@ class YOLOrthoTrainer:
 
             if avg_loss < best_loss:
                 best_loss = avg_loss
-                torch.save(
-                    {
-                        "epoch": epoch,
-                        "attr_heads_state": model.attr_heads.state_dict(),
-                        "loss": best_loss,
-                    },
-                    best_path,
-                )
+                ckpt = {
+                    "epoch": epoch,
+                    "attr_heads_state": model.attr_heads.state_dict(),
+                    "loss": best_loss,
+                }
+                torch.save(ckpt, best_path)
+                torch.save(ckpt, weights_attr_path)
 
         logger.info("Attribute head training complete. Best loss: %.4f", best_loss)
+        logger.info("attr_best.pt saved to '%s'.", weights_attr_path)
 
     def _build_ultralytics_args(
         self, phase: int, project: str, name: str
@@ -390,6 +397,36 @@ class YOLOrthoTrainer:
             # Resume
             resume=self.resume if phase == 2 else False,
         )
+
+    def _promote_weights(self, phase: int) -> None:
+        """After a training phase completes:
+        - Copy best.pt and last.pt to top-level weights/ with phase prefix.
+        - Move epoch*.pt files out of outputs/runs/ into epoch_checkpoints/.
+
+        Args:
+            phase: 1 or 2.
+        """
+        phase_name = f"phase{phase}"
+        phase_weights_dir = self.save_dir / phase_name / "weights"
+        dest_weights = self.project_root / "weights"
+        dest_epochs = self.project_root / "epoch_checkpoints" / phase_name
+        dest_weights.mkdir(parents=True, exist_ok=True)
+        dest_epochs.mkdir(parents=True, exist_ok=True)
+
+        if not phase_weights_dir.exists():
+            logger.warning("Phase %d weights dir not found: '%s'", phase, phase_weights_dir)
+            return
+
+        for pt_file in phase_weights_dir.glob("*.pt"):
+            if pt_file.name.startswith("epoch"):
+                # Move intermediate epoch checkpoints out of outputs/
+                shutil.move(str(pt_file), str(dest_epochs / pt_file.name))
+                logger.info("Moved %s → epoch_checkpoints/%s/", pt_file.name, phase_name)
+            elif pt_file.name in ("best.pt", "last.pt"):
+                # Copy valued weights to weights/ with phase prefix
+                dst_name = f"{phase_name}_{pt_file.name}"
+                shutil.copy2(pt_file, dest_weights / dst_name)
+                logger.info("Copied %s → weights/%s", pt_file.name, dst_name)
 
     def _create_pseudo_dataset_yaml(self) -> str:
         """Create a dataset.yaml pointing to the pseudo-labeled data directory."""

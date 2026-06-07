@@ -66,6 +66,7 @@ class YOLOrthoPredictor:
         iou_threshold: float = 0.45,
         attr_threshold: float = 0.5,
         img_size: tuple = (640, 1280),
+        attr_weights_path: Optional[str] = None,
     ):
         self.weights_path = Path(weights_path)
         self.device = device
@@ -73,6 +74,7 @@ class YOLOrthoPredictor:
         self.iou_threshold = iou_threshold
         self.attr_threshold = attr_threshold
         self.img_size = img_size
+        self.attr_weights_path = attr_weights_path
 
         # Models loaded lazily
         self._det_model = None       # ultralytics YOLO detection model
@@ -102,10 +104,26 @@ class YOLOrthoPredictor:
         from ultralytics import YOLO
         self._det_model = YOLO(str(self.weights_path))
 
-        # Try to load attribute head weights if available
-        attr_path = self.weights_path.parent / "attr_best.pt"
-        if attr_path.exists():
+        # Try to load attribute head weights if available.
+        # Search order: same dir → parent dir → user-supplied path (set via attr_weights_path)
+        _attr_candidates = [
+            self.weights_path.parent / "attr_best.pt",       # sibling of main weights
+            self.weights_path.parent.parent / "attr_best.pt",  # one level up
+        ]
+        if hasattr(self, "attr_weights_path") and self.attr_weights_path:
+            _attr_candidates.insert(0, Path(self.attr_weights_path))
+
+        attr_path = next((p for p in _attr_candidates if p.exists()), None)
+        if attr_path:
+            logger.info("Found attribute weights at '%s'.", attr_path)
             self._load_attr_heads(attr_path)
+        else:
+            logger.warning(
+                "Attribute weights (attr_best.pt) not found. "
+                "Disease attributes will be unavailable (all teeth shown as healthy). "
+                "Searched: %s",
+                ", ".join(str(p) for p in _attr_candidates),
+            )
 
         logger.info("Models loaded.")
 

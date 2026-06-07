@@ -80,8 +80,13 @@ def main():
         help="Path to model weights (.pt). Auto-detected if omitted."
     )
     parser.add_argument(
-        "--conf", type=float, default=0.01,
-        help="Detection confidence threshold (default: 0.10)."
+        "--attr-weights", default=None,
+        help="Path to attribute head weights (attr_best.pt). "
+             "Auto-searched in weights directory and its parent if omitted."
+    )
+    parser.add_argument(
+        "--conf", type=float, default=0.25,
+        help="Detection confidence threshold (default: 0.25)."
     )
     parser.add_argument(
         "--iou", type=float, default=0.45,
@@ -137,6 +142,7 @@ def main():
         conf_threshold=args.conf,
         iou_threshold=args.iou,
         img_size=(640, 1280),
+        attr_weights_path=args.attr_weights,
     )
 
     save = not args.no_save
