@@ -100,12 +100,12 @@ class YOLOrtho(nn.Module):
     def attach_feature_hooks(self) -> None:
         """Register forward hooks to capture FPN feature maps.
 
-        YOLOv8 internally passes feature maps through the neck.
-        We hook the 3 detection-scale outputs to feed the attribute heads.
-
-        Note: Hook indices may need adjustment if the model YAML changes.
-        In ultralytics YOLOv8, the detect head (Detect module) receives
-        features from the neck. We hook the layer just before Detect.
+        YOLOv8 model structure:
+          self.base_model        → ultralytics YOLO wrapper
+          self.base_model.model  → DetectionModel (nn.Module)
+          self.base_model.model.model → nn.Sequential of 23 layers (0-22)
+        The Detect head (layer 22) takes inputs from layers [15, 18, 21].
+        Negative indices: layer 15 = -8, layer 18 = -5, layer 21 = -2.
         """
         self._fpn_features = []
         self._hooks = []
@@ -118,26 +118,20 @@ class YOLOrtho(nn.Module):
                     self._fpn_features.append(out)
             return hook
 
-        # Find neck output layers in the ultralytics model
-        # In YOLOv8, model.model is a Sequential; the Detect head is the last module
-        # The 3 inputs to Detect are the outputs of the last 3 C2f blocks in the neck
-        inner_model = self.base_model.model  # ultralytics uses model.model
-
-        if not hasattr(inner_model, "__iter__"):
-            logger.warning("Cannot attach hooks — unexpected model structure.")
-            return
-
-        layers = list(inner_model.children())
-        # Neck detection-scale outputs: layers at indices -4, -3, -2 (before Detect)
-        hook_indices = [-4, -3, -2]
-
-        for i, hi in enumerate(hook_indices):
-            try:
-                target_layer = layers[hi]
-                h = target_layer.register_forward_hook(_make_hook(i))
+        try:
+            seq = self.base_model.model.model  # nn.Sequential of 23 layers
+            layers = list(seq)
+            n = len(layers)
+            target_indices = [-8, -5, -2]  # layers 15, 18, 21 for n=23
+            for i, hi in enumerate(target_indices):
+                h = layers[hi].register_forward_hook(_make_hook(i))
                 self._hooks.append(h)
-            except IndexError:
-                logger.warning("Could not attach hook at layer index %d.", hi)
+            logger.info(
+                "FPN hooks attached at layers %s.",
+                [n + idx for idx in target_indices],
+            )
+        except Exception as e:
+            logger.warning("Cannot attach hooks — unexpected model structure: %s", e)
 
     def remove_hooks(self) -> None:
         """Remove all registered forward hooks."""

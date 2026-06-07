@@ -155,7 +155,14 @@ class YOLOrthoPredictor:
             )
 
     def _attach_fpn_hooks(self) -> None:
-        """Attach hooks to capture intermediate FPN feature maps."""
+        """Attach hooks to capture intermediate FPN feature maps.
+
+        YOLOv8 model structure (23 layers, indices 0-22):
+          self._det_model.model        → ultralytics DetectionModel
+          self._det_model.model.model  → nn.Sequential of 23 layers
+        The Detect head (layer 22) takes inputs from layers [15, 18, 21].
+        Negative indices: layer 15 = -8, layer 18 = -5, layer 21 = -2.
+        """
         self._fpn_features = []
 
         def _make_hook(idx):
@@ -165,13 +172,20 @@ class YOLOrthoPredictor:
                 self._fpn_features[idx] = out
             return hook
 
-        # Attach to the 3 neck output layers before Detect head
         try:
-            inner = self._det_model.model
-            layers = list(inner.children())
-            for i, layer_idx in enumerate([-4, -3, -2]):
+            # Navigate to the nn.Sequential containing the individual layers
+            seq = self._det_model.model.model  # nn.Sequential of 23 layers
+            layers = list(seq)
+            n = len(layers)
+            # Detect head inputs: layers 15, 18, 21 (P3/P4/P5 scale outputs)
+            target_indices = [-8, -5, -2]  # = [n-8, n-5, n-2] for n=23 → 15,18,21
+            for i, layer_idx in enumerate(target_indices):
                 h = layers[layer_idx].register_forward_hook(_make_hook(i))
                 self._attr_hooks.append(h)
+            logger.info(
+                "FPN hooks attached at layers %s.",
+                [n + idx for idx in target_indices],
+            )
         except Exception as e:
             logger.warning("Could not attach FPN hooks: %s", e)
 

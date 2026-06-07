@@ -301,28 +301,35 @@ class YOLOrthoTrainer:
                 with torch.no_grad():
                     _, attr_outputs = model(batch_imgs)
 
-                # Flatten attribute predictions and labels for loss computation
+                if not attr_outputs:
+                    continue
+
+                # Pool all 3 scales spatially → (B, 4), then average across scales
+                # attr_outputs: list of 3 tensors each (B, num_attrs, H, W)
+                pooled_pred = torch.stack(
+                    [o.mean(dim=[2, 3]) for o in attr_outputs], dim=0
+                ).mean(dim=0)  # (B, 4)
+
+                # Build per-image supervision from labels
+                # batch_labels: list of B tensors each (N_teeth, 10)
                 all_preds = []
                 all_targets = []
                 all_dtypes = []
 
-                for scale_pred, lbl in zip(attr_outputs, batch_labels):
-                    if lbl is None or len(lbl) == 0:
+                for img_idx, lbl in enumerate(batch_labels):
+                    if lbl is None or len(lbl) == 0 or img_idx >= pooled_pred.shape[0]:
                         continue
                     lbl = lbl.to(device)
-                    B, num_attrs, H, W = scale_pred.shape
-                    # Flatten spatial dims: (B, num_attrs, H*W) → (B*H*W, num_attrs)
-                    flat_pred = scale_pred.permute(0, 2, 3, 1).reshape(-1, num_attrs)
-                    # For now, repeat each label across spatial positions (simplified)
-                    # In full implementation, we match predictions to GT anchors
+                    attrs = lbl[:, 5:9]        # (N_teeth, 4) disease flags
                     data_types = lbl[:, 9].long()
-                    attrs = lbl[:, 5:9]
-                    # Use mean-pooled prediction for label-level supervision (simplified)
-                    pooled_pred = scale_pred.mean(dim=[2, 3])  # (B, num_attrs)
-                    all_preds.append(pooled_pred[:len(lbl)])
-                    all_targets.append(attrs)
-                    all_dtypes.append(data_types)
-                    break  # Use first scale only for attribute head training
+
+                    # Image-level supervision: tooth is diseased if any annotation says so
+                    img_attrs = attrs.max(dim=0).values.unsqueeze(0).float()  # (1, 4)
+                    img_dtype = data_types.max().unsqueeze(0)                  # (1,)
+
+                    all_preds.append(pooled_pred[img_idx : img_idx + 1])       # (1, 4)
+                    all_targets.append(img_attrs)
+                    all_dtypes.append(img_dtype)
 
                 if not all_preds:
                     continue
