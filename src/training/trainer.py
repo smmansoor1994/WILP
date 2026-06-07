@@ -75,14 +75,16 @@ class YOLOrthoTrainer:
         # ── Phase 1: Pre-train on Part 1+2 (detection only, no disease) ───────
         phase1_weights = self.save_dir / "phase1" / "weights" / "best.pt"
 
-        if not phase1_weights.exists() or self.resume is False:
+        # Skip Phase 1 if weights already exist (e.g. second call in full pipeline
+        # after pseudo-labeling). Only re-run if explicitly resuming or weights missing.
+        if not phase1_weights.exists():
             logger.info("=" * 60)
             logger.info("PHASE 1: Pre-training on quadrant + enumeration data")
             logger.info("(No disease attribute loss — data_type 0 and 1 only)")
             logger.info("=" * 60)
             self._train_phase1()
         else:
-            logger.info("Phase 1 weights found at '%s'. Skipping.", phase1_weights)
+            logger.info("Phase 1 weights found at '%s'. Skipping Phase 1.", phase1_weights)
 
         # ── Phase 2: Full training on all data (with disease attributes) ───────
         logger.info("=" * 60)
@@ -92,6 +94,21 @@ class YOLOrthoTrainer:
         self._train_phase2(pretrain_weights=str(phase1_weights))
 
         logger.info("Training complete. Best weights saved to '%s'.", self.save_dir)
+
+    def train_phase1_only(self) -> None:
+        """Run Phase 1 only (detection pre-training). Used by the full pipeline
+        before pseudo-labeling so Phase 2 can use pseudo-labels on the second call.
+        Phase 2 is intentionally skipped here.
+        """
+        phase1_weights = self.save_dir / "phase1" / "weights" / "best.pt"
+        if phase1_weights.exists():
+            logger.info("Phase 1 weights already exist at '%s'. Skipping.", phase1_weights)
+            return
+        logger.info("=" * 60)
+        logger.info("PHASE 1 ONLY: Pre-training on quadrant + enumeration data")
+        logger.info("=" * 60)
+        self._train_phase1()
+        self._promote_weights(phase=1)
 
     def _train_phase1(self) -> None:
         """Phase 1: standard YOLOv8 training on Parts 1+2 only.
@@ -241,17 +258,23 @@ class YOLOrthoTrainer:
             img_size=(self.train_cfg.get("input_height", 640),
                       self.train_cfg.get("input_width", 1280)),
         )
+        # Cap workers to avoid Colab/low-CPU warnings (system may only support 2)
+        import os
+        max_workers = min(self.train_cfg.get("workers", 4), os.cpu_count() or 2, 4)
         loader = torch.utils.data.DataLoader(
             dataset,
             batch_size=self.train_cfg.get("batch_size", 8),
             shuffle=True,
-            num_workers=self.train_cfg.get("workers", 4),
+            num_workers=max_workers,
             collate_fn=YOLOrthoDataset.collate_fn,
         )
 
         optimizer = AdamW(model.attr_heads.parameters(), lr=1e-3, weight_decay=1e-4)
-        scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
         attr_loss_fn = AttributeBCELoss(num_attrs=4, loss_weight=8.0)
+        # Scheduler initialized after first optimizer.step() to avoid PyTorch warning
+        # about scheduler.step() being called before optimizer.step()
+        scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
+        optimizer_has_stepped = False
 
         # Set train mode only on pure nn.Module components, bypassing the
         # ultralytics YOLO wrapper whose .train() method is overridden and
@@ -311,11 +334,14 @@ class YOLOrthoTrainer:
                 loss = attr_loss_fn(pred_tensor, tgt_tensor, dt_tensor)
                 loss.backward()
                 optimizer.step()
+                optimizer_has_stepped = True
 
                 epoch_loss += loss.item()
                 n_batches += 1
 
-            scheduler.step()
+            # Only step scheduler after optimizer has been called at least once
+            if optimizer_has_stepped:
+                scheduler.step()
             avg_loss = epoch_loss / max(n_batches, 1)
             logger.info(
                 "Attr head epoch [%d/%d]  loss=%.4f", epoch + 1, epochs, avg_loss
@@ -357,9 +383,16 @@ class YOLOrthoTrainer:
         else:
             data_yaml = str(self.project_root / "config" / "dataset.yaml")
 
+        # Use phase-specific epoch count if defined, else fall back to shared 'epochs'
+        default_epochs = t.get("epochs", 200)
+        if phase == 1:
+            num_epochs = t.get("phase1_epochs", default_epochs)
+        else:
+            num_epochs = t.get("phase2_epochs", default_epochs)
+
         return dict(
             data=data_yaml,
-            epochs=t.get("epochs", 200),
+            epochs=num_epochs,
             imgsz=[t.get("input_height", 640), t.get("input_width", 1280)],
             batch=t.get("batch_size", 8),
             workers=t.get("workers", 4),

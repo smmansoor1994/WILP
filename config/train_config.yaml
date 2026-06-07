@@ -4,7 +4,9 @@
 # ============================================================
 
 training:
-  epochs: 100
+  epochs: 100              # fallback if phase-specific values are not set
+  phase1_epochs: 100        # Phase 1: detection pre-training from scratch
+  phase2_epochs: 50         # Phase 2: fine-tuning from Phase 1 weights (fewer needed)
   batch_size: 8              # Reduce if OOM; 8 fits on 16GB GPU with 1280x640 input
   workers: 4                 # DataLoader worker threads
   seed: 42

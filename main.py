@@ -333,10 +333,21 @@ def run_full_pipeline(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     stage_preprocess(args)
-    # Phase 1: train detector on Parts 1+2+3 (needed to produce pseudo labels)
-    stage_train(args)
+
+    # Phase 1 only: train detector on Parts 1+2 (needed to produce pseudo labels).
+    # Phase 2 is intentionally skipped here so pseudo labels can be generated first.
+    from src.training.trainer import YOLOrthoTrainer
+    trainer = YOLOrthoTrainer(
+        config_path=args.config,
+        resume=args.resume,
+        device=args.device,
+    )
+    trainer.train_phase1_only()
+
     stage_pseudo_label(args)
-    # Phase 2: retrain full model with pseudo labels + disease attribute heads
+
+    # Full training: Phase 1 weights exist → skipped automatically.
+    # Phase 2 + attribute heads trained on all data including pseudo labels.
     stage_train(args)
     stage_evaluate(args)
 
