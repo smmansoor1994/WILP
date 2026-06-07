@@ -166,10 +166,12 @@ def apply_linear_sum_assignment(
         class_idx = int(fdi_slot)
         fdi_num = class_to_fdi(class_idx)
 
-        # Assigned class probability as confidence
-        assign_conf = float(valid_probs[det_idx, class_idx])
-        if assign_conf < conf_threshold:
-            continue  # Skip low-confidence assignments
+        # Use the DETECTION confidence (from NMS), not the reassigned class prob.
+        # The class-prob check was a double-filter that silently dropped teeth
+        # reassigned to a different FDI slot by the linear sum assignment.
+        det_conf = float(valid_confs[det_idx])
+        if det_conf < conf_threshold:
+            continue
 
         # Bounding box
         bbox_xywhn = valid_boxes_xywhn[det_idx].tolist()
@@ -197,7 +199,7 @@ def apply_linear_sum_assignment(
             fdi=fdi_num,
             fdi_name=fdi_to_name(fdi_num),
             class_idx=class_idx,
-            conf=float(valid_confs[det_idx]),
+            conf=det_conf,
             bbox_xyxy=bbox_xyxy,
             bbox_xywhn=bbox_xywhn,
             is_impacted=is_impacted,
@@ -258,13 +260,30 @@ def postprocess_yolo_output(
     if hasattr(boxes, "prob") and boxes.prob is not None:
         class_probs = boxes.prob.cpu().numpy()  # (N, num_classes)
     else:
-        # Fall back: one-hot from argmax class
+        # Extract per-class probabilities from the raw detection tensor.
+        # boxes.data shape: (N, 6+nc) where columns are [x1,y1,x2,y2,conf,cls,p0..pnc-1]
+        # or in newer ultralytics: boxes.data[:, 6:] holds class scores.
+        # Fall back to soft one-hot scaled by confidence when not available.
         n = len(confs)
         class_ids = boxes.cls.cpu().numpy().astype(int)
-        class_probs = np.zeros((n, NUM_CLASSES), dtype=np.float32)
-        for i, (c, conf) in enumerate(zip(class_ids, confs)):
-            if 0 <= c < NUM_CLASSES:
-                class_probs[i, c] = conf
+        try:
+            # ultralytics >= 8.x stores raw cls logits in boxes.data cols 6:
+            raw = boxes.data.cpu().numpy()        # (N, 6+nc) or (N, 5+nc)
+            if raw.shape[1] >= 6 + NUM_CLASSES:
+                class_probs = raw[:, 6 : 6 + NUM_CLASSES].astype(np.float32)
+            elif raw.shape[1] >= 5 + NUM_CLASSES:
+                class_probs = raw[:, 5 : 5 + NUM_CLASSES].astype(np.float32)
+            else:
+                raise ValueError("unexpected boxes.data width")
+            # Normalize rows to sum to 1 (softmax was applied upstream)
+            row_sums = class_probs.sum(axis=1, keepdims=True).clip(1e-7)
+            class_probs = class_probs / row_sums
+        except Exception:
+            # Last-resort: soft one-hot — assign full confidence to predicted class
+            class_probs = np.zeros((n, NUM_CLASSES), dtype=np.float32)
+            for i, (c, conf) in enumerate(zip(class_ids, confs)):
+                if 0 <= c < NUM_CLASSES:
+                    class_probs[i, c] = conf
 
     return apply_linear_sum_assignment(
         class_probs=class_probs,

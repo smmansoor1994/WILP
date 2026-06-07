@@ -4,10 +4,25 @@
 # ============================================================
 
 training:
-  epochs: 20              # fallback if phase-specific values are not set
-  phase1_epochs: 20        # Phase 1: detection pre-training from scratch
-  phase2_epochs: 10         # Phase 2: fine-tuning from Phase 1 weights (fewer needed)
-  phase2b_epochs: 30        # Phase 2b: attribute head fine-tuning (backbone frozen)
+  epochs: 100             # fallback if phase-specific values are not set
+  phase1_epochs: 100       # Phase 1: detection pre-training from scratch
+                           #   • Paper uses 100 epochs. Sample dataset (50 imgs) needs
+                           #     fewer to converge, but 100 prevents under-fitting.
+                           #   • More epochs → better FDI class separation → fewer
+                           #     wrong tooth assignments → higher recall/precision.
+
+  phase2_epochs: 50        # Phase 2: fine-tuning detection + all data incl. disease
+                           #   • Start from Phase 1 best.pt → converges faster.
+                           #   • 50 allows all 3 data-type branches to stabilise.
+
+  phase2b_epochs: 50       # Phase 2b: attribute head fine-tuning (backbone frozen)
+                           #   • Previously 30 — increased to 50.
+                           #   • More epochs = better sensitivity (disease recall)
+                           #     without harming specificity (backbone frozen,
+                           #     so detection performance is not degraded).
+                           #   • CosineAnnealingLR decays from 1e-3 → 1e-5 over
+                           #     these epochs; 50 gives a gentler decay slope.
+
   batch_size: 8              # Reduce if OOM; 8 fits on 16GB GPU with 1280x640 input
   workers: 4                 # DataLoader worker threads
   seed: 42
@@ -28,6 +43,9 @@ training:
   loss_cls: 0.5              # Classification loss weight
   loss_dfl: 1.5              # Distribution Focal Loss weight
   # Disease attribute losses (binary cross-entropy per attribute)
+  # Weight 8.0 from paper. Raising attr loss weight increases sensitivity
+  # (more disease detected) but risks false positives. Lowering improves
+  # specificity. 8.0 is the paper's balanced recommendation.
   loss_attr: 8.0             # Disease attribute loss weight (same for all 4)
 
   # Hierarchical training flags

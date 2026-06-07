@@ -338,39 +338,52 @@ class YOLOrthoTrainer:
                 if not attr_outputs:
                     continue
 
-                # Pool all 3 scales spatially → (B, 4), then average across scales
-                # attr_outputs: list of 3 tensors each (B, num_attrs, H, W)
-                pooled_pred = torch.stack(
-                    [o.mean(dim=[2, 3]) for o in attr_outputs], dim=0
-                ).mean(dim=0)  # (B, 4)
+                # ── Per-tooth supervision (matches inference spatial sampling) ──────
+                # Training previously used global spatial average per image → image-level
+                # labels, which caused the model to predict "any tooth in image has
+                # disease X" rather than "this specific tooth has disease X".
+                #
+                # Fix: sample attr features at each GT tooth's centre in the feature
+                # map, exactly as inference does at each detected box centre.
+                # attr_outputs: list of 3 tensors, each (B, 4, H_f, W_f) — logits
 
-                # Build per-image supervision from labels
-                # batch_labels: list of B tensors each (N_teeth, 10)
                 all_preds = []
                 all_targets = []
                 all_dtypes = []
 
                 for img_idx, lbl in enumerate(batch_labels):
-                    if lbl is None or len(lbl) == 0 or img_idx >= pooled_pred.shape[0]:
+                    if lbl is None or len(lbl) == 0:
                         continue
                     lbl = lbl.to(device)
-                    attrs = lbl[:, 5:9]        # (N_teeth, 4) disease flags
+                    cx = lbl[:, 1]              # (N_teeth,) normalised centre-x [0,1]
+                    cy = lbl[:, 2]              # (N_teeth,) normalised centre-y [0,1]
+                    attrs = lbl[:, 5:9].float() # (N_teeth, 4) binary disease flags
                     data_types = lbl[:, 9].long()
 
-                    # Image-level supervision: tooth is diseased if any annotation says so
-                    img_attrs = attrs.max(dim=0).values.unsqueeze(0).float()  # (1, 4)
-                    img_dtype = data_types.max().unsqueeze(0)                  # (1,)
+                    # Sample each scale at each GT tooth's location
+                    scale_samples = []
+                    for feat in attr_outputs:
+                        # feat: (B, 4, H_f, W_f)
+                        _, _, H_f, W_f = feat.shape
+                        xf = (cx * W_f).long().clamp(0, W_f - 1)   # (N_teeth,)
+                        yf = (cy * H_f).long().clamp(0, H_f - 1)   # (N_teeth,)
+                        # feat[img_idx, :, yf, xf] → (4, N_teeth) → transpose → (N_teeth, 4)
+                        sampled = feat[img_idx, :, yf, xf].T        # (N_teeth, 4)
+                        scale_samples.append(sampled)
 
-                    all_preds.append(pooled_pred[img_idx : img_idx + 1])       # (1, 4)
-                    all_targets.append(img_attrs)
-                    all_dtypes.append(img_dtype)
+                    # Average logits across scales → (N_teeth, 4) — matches inference
+                    tooth_logits = torch.stack(scale_samples, dim=0).mean(dim=0)
+
+                    all_preds.append(tooth_logits)   # (N_teeth, 4)
+                    all_targets.append(attrs)        # (N_teeth, 4)
+                    all_dtypes.append(data_types)    # (N_teeth,)
 
                 if not all_preds:
                     continue
 
-                pred_tensor = torch.cat(all_preds, dim=0)
-                tgt_tensor = torch.cat(all_targets, dim=0).to(device)
-                dt_tensor = torch.cat(all_dtypes, dim=0).to(device)
+                pred_tensor = torch.cat(all_preds, dim=0)             # (total_teeth, 4)
+                tgt_tensor = torch.cat(all_targets, dim=0).to(device) # (total_teeth, 4)
+                dt_tensor = torch.cat(all_dtypes, dim=0).to(device)   # (total_teeth,)
 
                 loss = attr_loss_fn(pred_tensor, tgt_tensor, dt_tensor)
                 loss.backward()

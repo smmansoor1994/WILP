@@ -4,10 +4,9 @@ src/utils/visualize.py
 Visualization utilities for YOLOrtho dental X-ray detections.
 
 Draws:
-  - Bounding boxes colored by quadrant (Q1=blue, Q2=green, Q3=red, Q4=yellow)
-  - FDI tooth number labels
-  - Disease attribute icons/text
-  - Dental chart overlay showing detected teeth on a standard dental diagram
+  - Bounding boxes colored by quadrant
+  - Labels in the form  "Q: {quad} N: {pos} D: {disease}"
+  - Filled label background matching the box color (white text)
 """
 
 import logging
@@ -21,24 +20,25 @@ from src.utils.fdi import fdi_to_quadrant_enum
 logger = logging.getLogger(__name__)
 
 # ─── Color Scheme (BGR for OpenCV) ────────────────────────────────────────────
-# Quadrant colors
+# One distinct color per quadrant, matching the reference visualization style.
+# Q1 Upper-Right → cyan-blue, Q2 Upper-Left → navy/purple,
+# Q3 Lower-Left  → red,       Q4 Lower-Right → orange
 QUADRANT_COLORS = {
-    1: (255, 100, 50),    # Q1 Upper-Right — blue-ish
-    2: (50, 200, 50),     # Q2 Upper-Left  — green
-    3: (50, 50, 255),     # Q3 Lower-Left  — red
-    4: (50, 200, 255),    # Q4 Lower-Right — yellow
+    1: (210, 160,  50),   # Q1 Upper-Right — steel blue (BGR)
+    2: (180,  60,  60),   # Q2 Upper-Left  — slate purple/dark-blue (BGR)
+    3: ( 40,  40, 200),   # Q3 Lower-Left  — red (BGR)
+    4: ( 30, 140, 210),   # Q4 Lower-Right — orange (BGR)
 }
 
-# Disease colors
-DISEASE_COLORS = {
-    "Impacted":          (0, 165, 255),    # Orange
-    "Caries":            (0, 255, 255),    # Yellow
-    "Deep Caries":       (0, 0, 255),      # Red
-    "Periapical Lesion": (147, 20, 255),   # Magenta
+# Disease name abbreviation used in the label
+DISEASE_ABBREV = {
+    "Impacted":          "Impacted",
+    "Caries":            "Caries",
+    "Deep Caries":       "Deep Caries",
+    "Periapical Lesion": "Periapical Lesion",
 }
 
-HEALTHY_COLOR = (0, 220, 0)      # Green — healthy tooth
-DISEASE_COLOR = (0, 0, 220)      # Red — diseased tooth
+HEALTHY_COLOR = (100, 180, 100)  # muted green — healthy tooth
 
 
 def draw_teeth_detections(
@@ -46,102 +46,87 @@ def draw_teeth_detections(
     teeth,                        # List[ToothDetection]
     show_fdi: bool = True,
     show_diseases: bool = True,
-    show_conf: bool = True,
+    show_conf: bool = False,
     line_thickness: int = 2,
 ) -> np.ndarray:
-    """Draw all tooth detections on the image.
+    """Draw tooth detections with  "Q: x N: y D: disease"  labels.
 
     Args:
         image:           BGR image (H, W, 3) — the panoramic X-ray.
         teeth:           List of ToothDetection results.
-        show_fdi:        Draw FDI tooth number label.
-        show_diseases:   Highlight diseased teeth and list disease names.
-        show_conf:       Show detection confidence score.
-        line_thickness:  Bounding box line thickness.
+        show_fdi:        Include tooth number in label (kept for API compat, always on).
+        show_diseases:   Show disease name in label.
+        show_conf:       Show confidence score (disabled by default to match reference).
+        line_thickness:  Bounding box stroke width.
 
     Returns:
-        Annotated BGR image.
+        Annotated BGR image copy.
     """
     canvas = image.copy()
     h, w = canvas.shape[:2]
 
-    for tooth in teeth:
-        # ── Determine bounding box coordinates ───────────────────────────────
+    # Scale font / thickness with image width so it looks right at any resolution
+    scale   = w / 2400          # reference width ≈ 2400 px
+    font_sc = max(0.40, min(0.65, 0.50 * scale * 2.5))
+    thick   = max(1, int(1 * scale * 2.5))
+    box_t   = max(2, int(line_thickness * scale * 2.5))
+    font    = cv2.FONT_HERSHEY_SIMPLEX
+
+    # Collect label placements and shift overlapping ones downward
+    label_tops: list = []   # (x1, x2, y) of placed labels so far
+
+    for tooth in sorted(teeth, key=lambda t: t.bbox_xyxy[0]):  # left-to-right
         x1, y1, x2, y2 = [int(v) for v in tooth.bbox_xyxy]
-        x1, x2 = np.clip([x1, x2], 0, w - 1)
-        y1, y2 = np.clip([y1, y2], 0, h - 1)
+        x1, x2 = int(np.clip(x1, 0, w - 1)), int(np.clip(x2, 0, w - 1))
+        y1, y2 = int(np.clip(y1, 0, h - 1)), int(np.clip(y2, 0, h - 1))
 
-        # ── Choose color based on quadrant and disease status ─────────────────
-        quadrant, _ = fdi_to_quadrant_enum(tooth.fdi)
-        base_color = QUADRANT_COLORS.get(quadrant, (200, 200, 200))
+        quadrant, position = fdi_to_quadrant_enum(tooth.fdi)
+        box_color = QUADRANT_COLORS.get(quadrant, (180, 180, 180))
 
-        if tooth.diseases and show_diseases:
-            # Diseased: draw with disease-specific color (use first disease)
-            box_color = DISEASE_COLOR
-        else:
-            box_color = base_color
+        # ── Bounding box ──────────────────────────────────────────────────────
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, box_t)
 
-        # ── Draw bounding box ─────────────────────────────────────────────────
-        cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, line_thickness)
+        # ── Label text  "Q: 3 N: 6 D: Caries" ───────────────────────────────
+        disease_str = tooth.diseases[0] if tooth.diseases else "Healthy"
+        disease_str = DISEASE_ABBREV.get(disease_str, disease_str)
+        label = f"Q: {quadrant} N: {position} D: {disease_str}"
 
-        # ── Build label text ──────────────────────────────────────────────────
-        label_parts = []
-        if show_fdi:
-            label_parts.append(str(tooth.fdi))
-        if show_conf:
-            label_parts.append(f"{tooth.conf:.2f}")
-        if show_diseases and tooth.diseases:
-            label_parts.append("|".join(d[:3] for d in tooth.diseases))  # abbreviated
+        (lw, lh), baseline = cv2.getTextSize(label, font, font_sc, thick)
+        pad = 4
 
-        label = " ".join(label_parts)
+        # Default: just above box top
+        ly = y1 - pad
+        if ly - lh - pad < 0:
+            ly = y1 + lh + pad
 
-        # ── Draw label background ─────────────────────────────────────────────
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = max(0.35, min(0.55, w / 2400))  # scale to image width
-        thickness = 1
+        # Nudge down if it overlaps a previously placed label at same x range
+        for (px1, px2, py) in label_tops:
+            # x overlap?
+            if x1 < px2 and x2 > px1 and abs(ly - py) < lh + pad * 2:
+                ly = py + lh + pad * 2
 
-        (lw, lh), baseline = cv2.getTextSize(label, font, font_scale, thickness)
-        label_y = max(y1 - 4, lh + 4)
+        label_tops.append((x1, x1 + lw + pad, ly))
 
+        # Filled background rectangle
         cv2.rectangle(
             canvas,
-            (x1, label_y - lh - baseline),
-            (x1 + lw, label_y),
+            (x1 - 1, ly - lh - pad),
+            (x1 + lw + pad, ly + baseline),
             box_color,
             -1,
         )
-        # White text for readability
+        # White text
         cv2.putText(
-            canvas, label, (x1, label_y - baseline),
-            font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA
+            canvas, label,
+            (x1 + 2, ly - baseline),
+            font, font_sc, (255, 255, 255), thick, cv2.LINE_AA,
         )
-
-    # ── Add legend ────────────────────────────────────────────────────────────
-    canvas = _draw_legend(canvas)
 
     return canvas
 
 
 def _draw_legend(canvas: np.ndarray) -> np.ndarray:
-    """Draw a small legend on the bottom-left of the image."""
-    h, w = canvas.shape[:2]
-    legend_items = [
-        ("Q1 Upper-Right", QUADRANT_COLORS[1]),
-        ("Q2 Upper-Left",  QUADRANT_COLORS[2]),
-        ("Q3 Lower-Left",  QUADRANT_COLORS[3]),
-        ("Q4 Lower-Right", QUADRANT_COLORS[4]),
-        ("Diseased",       DISEASE_COLOR),
-    ]
-
-    x0, y0 = 10, h - 10 - len(legend_items) * 20
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    fs = max(0.3, min(0.45, w / 2400))
-
-    for i, (text, color) in enumerate(legend_items):
-        y = y0 + i * 20
-        cv2.rectangle(canvas, (x0, y - 12), (x0 + 15, y), color, -1)
-        cv2.putText(canvas, text, (x0 + 20, y - 2), font, fs, (255, 255, 255), 1)
-
+    """No-op — legend removed to match clean reference style."""
     return canvas
 
 

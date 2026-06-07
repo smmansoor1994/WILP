@@ -86,7 +86,8 @@ def main():
     )
     parser.add_argument(
         "--conf", type=float, default=0.1,
-        help="Detection confidence threshold (default: 0.25)."
+        help="Detection confidence threshold (default: 0.1). "
+             "Lower = more teeth detected; raise to reduce false positives."
     )
     parser.add_argument(
         "--iou", type=float, default=0.45,
@@ -96,6 +97,13 @@ def main():
         "--attr-threshold", type=float, default=0.3,
         help="Disease attribute probability threshold (default: 0.3). "
              "Lower values increase disease sensitivity."
+    )
+    parser.add_argument(
+        "--attr-mode", default="per_tooth",
+        choices=["per_tooth", "global_avg"],
+        help="Attribute inference mode (default: per_tooth). "
+             "Use 'global_avg' for models trained before June 2026 per-tooth fix. "
+             "Use 'per_tooth' for models retrained with the current trainer.py."
     )
     parser.add_argument(
         "--device", default="cpu",
@@ -149,10 +157,11 @@ def main():
         attr_threshold=args.attr_threshold,
         img_size=(640, 1280),
         attr_weights_path=args.attr_weights,
+        attr_inference_mode=args.attr_mode,
     )
 
     save = not args.no_save
-    logger.info("Attr threshold: %.2f", args.attr_threshold)
+    logger.info("Attr threshold : %.2f  mode=%s", args.attr_threshold, args.attr_mode)
 
     results = predictor.predict(
         input_path=str(img_path),

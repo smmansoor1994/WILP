@@ -56,17 +56,24 @@ class YOLOrthoPredictor:
         iou_threshold:   NMS IoU threshold.
         attr_threshold:  Threshold for binary attribute classification.
         img_size:        Input image size (H, W) — should match training.
+        attr_inference_mode: How to aggregate FPN features for disease prediction.
+            'per_tooth'  — sample feature map at each detected box centre (default,
+                           matches trainer.py after the per-tooth supervision fix).
+            'global_avg' — global spatial average across the whole feature map
+                           (use this for models trained BEFORE the per-tooth fix,
+                           e.g. baseline-disease-100-main).
     """
 
     def __init__(
         self,
         weights_path: str,
         device: str = "cuda",
-        conf_threshold: float = 0.25,
+        conf_threshold: float = 0.1,
         iou_threshold: float = 0.45,
-        attr_threshold: float = 0.5,
+        attr_threshold: float = 0.3,
         img_size: tuple = (640, 1280),
         attr_weights_path: Optional[str] = None,
+        attr_inference_mode: str = "per_tooth",
     ):
         self.weights_path = Path(weights_path)
         self.device = device
@@ -75,6 +82,7 @@ class YOLOrthoPredictor:
         self.attr_threshold = attr_threshold
         self.img_size = img_size
         self.attr_weights_path = attr_weights_path
+        self.attr_inference_mode = attr_inference_mode  # 'per_tooth' | 'global_avg'
 
         # Models loaded lazily
         self._det_model = None       # ultralytics YOLO detection model
@@ -353,20 +361,15 @@ class YOLOrthoPredictor:
             (N, 4) numpy array of sigmoid attribute probabilities,
             or None if attribute heads are not available.
 
-        Training used:
-            pooled_pred = stack([o.mean(dim=[2,3]) for o in attr_outputs]).mean(dim=0)
-            BCEWithLogitsLoss(pooled_pred, targets)  ← sigmoid applied internally
-
-        Inference must match: average logits over spatial dims, then over scales,
-        then apply sigmoid — NOT sigmoid-first-then-average (Jensen's inequality
-        makes the latter systematically lower → disease suppressed).
-
-        Per-tooth discrimination:
-            Rather than broadcasting one image-level score to every tooth (which
-            dilutes a single diseased tooth's signal across 30 healthy spatial
-            cells), we sample each scale's feature map at the detection-box centre.
-            This is consistent with backbone spatial structure even though training
-            used global pooling.
+        Two modes (set via self.attr_inference_mode):
+          'per_tooth'  — Sample feature map at each detected box centre, average
+                         logits across 3 FPN scales, then apply sigmoid.
+                         Use for models trained with per-tooth spatial supervision
+                         (trainer.py after the June 2026 fix).
+          'global_avg' — Average logits over ALL spatial positions and ALL scales,
+                         then apply sigmoid, then tile to every tooth.
+                         Use for models trained with image-level global pooling
+                         (e.g. baseline-disease-100-main).
         """
         if not self._fpn_features or self._attr_heads is None:
             return None
@@ -387,7 +390,7 @@ class YOLOrthoPredictor:
                 if N == 0:
                     return None
 
-                # ── Image-level probability (logit-mean → sigmoid, matching training) ──
+                # ── Image-level diagnostic (always logged regardless of mode) ─────────
                 img_logit = torch.stack(
                     [o.mean(dim=[2, 3]) for o in attr_outputs], dim=0
                 ).mean(dim=0)  # (1, 4)
@@ -398,28 +401,33 @@ class YOLOrthoPredictor:
                     *img_prob.tolist(),
                 )
 
-                # ── Per-tooth spatial sampling at detection-box centre ─────────────────
-                # boxes.xywhn: normalised [cx, cy, w, h] relative to original image
-                boxes_xywhn = det_result.boxes.xywhn.cpu().numpy()  # (N, 4)
-                cx_norm = boxes_xywhn[:, 0]  # (N,)
-                cy_norm = boxes_xywhn[:, 1]  # (N,)
+                if self.attr_inference_mode == "global_avg":
+                    # ── Mode: global average (matches old image-level training) ────────
+                    # Apply sigmoid to the global average logit, then tile to N teeth
+                    per_tooth_probs = np.tile(img_prob, (N, 1))
+                    logger.info(
+                        "Attr mode=global_avg  probs: [%.3f, %.3f, %.3f, %.3f]",
+                        *img_prob.tolist(),
+                    )
+                else:
+                    # ── Mode: per_tooth (matches per-tooth spatial training) ───────────
+                    boxes_xywhn = det_result.boxes.xywhn.cpu().numpy()  # (N, 4)
+                    cx_norm = boxes_xywhn[:, 0]
+                    cy_norm = boxes_xywhn[:, 1]
 
-                per_tooth_logits = []
-                for i in range(N):
-                    scale_samples = []
-                    for feat in attr_outputs:
-                        # feat: (1, 4, H_f, W_f)  ← logits (no sigmoid yet)
-                        _, _, H_f, W_f = feat.shape
-                        xf = max(0, min(int(cx_norm[i] * W_f), W_f - 1))
-                        yf = max(0, min(int(cy_norm[i] * H_f), H_f - 1))
-                        scale_samples.append(feat[0, :, yf, xf])  # (4,) logits
+                    per_tooth_logits = []
+                    for i in range(N):
+                        scale_samples = []
+                        for feat in attr_outputs:
+                            _, _, H_f, W_f = feat.shape
+                            xf = max(0, min(int(cx_norm[i] * W_f), W_f - 1))
+                            yf = max(0, min(int(cy_norm[i] * H_f), H_f - 1))
+                            scale_samples.append(feat[0, :, yf, xf])  # (4,) logits
+                        tooth_logit = torch.stack(scale_samples, dim=0).mean(dim=0)
+                        per_tooth_logits.append(tooth_logit)
 
-                    # Average logits across scales (matching training normalisation)
-                    tooth_logit = torch.stack(scale_samples, dim=0).mean(dim=0)  # (4,)
-                    per_tooth_logits.append(tooth_logit)
-
-                per_tooth_logits_t = torch.stack(per_tooth_logits, dim=0)  # (N, 4)
-                per_tooth_probs = torch.sigmoid(per_tooth_logits_t).cpu().numpy()  # (N, 4)
+                    per_tooth_logits_t = torch.stack(per_tooth_logits, dim=0)  # (N, 4)
+                    per_tooth_probs = torch.sigmoid(per_tooth_logits_t).cpu().numpy()  # (N, 4)
 
                 logger.info(
                     "Attr per-tooth probs range  min=[%.3f, %.3f, %.3f, %.3f]"
