@@ -222,7 +222,13 @@ class YOLOrthoTrainer:
         from src.data.dataset import YOLOrthoDataset
 
         device = self.device
-        epochs = max(20, self.train_cfg.get("epochs", 200) // 5)
+        # Phase 2b epochs: use dedicated key > fall back to epochs//5 > minimum 20
+        epochs = int(
+            self.train_cfg.get(
+                "phase2b_epochs",
+                max(20, self.train_cfg.get("epochs", 200) // 5),
+            )
+        )
 
         logger.info(
             "Attribute head fine-tuning: %d epochs, device=%s", epochs, device

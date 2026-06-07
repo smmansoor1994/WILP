@@ -132,6 +132,7 @@ class YOLOrthoPredictor:
         try:
             from src.models.heads import MultiAttributeHead
             from src.models.yolortho import _infer_fpn_channels
+            import math
 
             checkpoint = torch.load(str(attr_path), map_location=self.device)
             fpn_channels = [320, 640, 640]  # YOLOv8x defaults
@@ -145,6 +146,35 @@ class YOLOrthoPredictor:
             )
             self._attr_heads.to(self.device)
             self._attr_heads.eval()
+
+            # ── Sanity check: warn if heads are still at bias initialisation ──
+            state = checkpoint.get("attr_heads_state", {})
+            init_bias = -math.log(99)  # ≈ -4.595 — what nn.init sets at startup
+            bias_vals = [
+                v.item() for k, v in state.items()
+                if "out.bias" in k
+            ]
+            if bias_vals and all(abs(b - init_bias) < 0.01 for b in bias_vals):
+                logger.warning(
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "  UNTRAINED ATTR HEADS DETECTED in '%s'\n"
+                    "  All output biases are still at initialisation value\n"
+                    "  (sigmoid=0.01).  This happens when the training loop\n"
+                    "  had loss=0.0 every epoch (no_grad bug or missing\n"
+                    "  labels_ext data) and no gradients ever updated the\n"
+                    "  attribute heads.\n"
+                    "  ► Disease diagnosis will show EVERYTHING AS HEALTHY.\n"
+                    "  ► Re-run Phase 2b training with the current fixed code.\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    attr_path,
+                )
+            else:
+                trained_epochs = checkpoint.get("epoch", "?")
+                best_loss = checkpoint.get("loss", "?")
+                logger.info(
+                    "Attr heads appear trained: saved epoch=%s, best_loss=%s",
+                    trained_epochs, best_loss,
+                )
 
             # Attach hooks to capture FPN features
             self._attach_fpn_hooks()
@@ -322,6 +352,21 @@ class YOLOrthoPredictor:
         Returns:
             (N, 4) numpy array of sigmoid attribute probabilities,
             or None if attribute heads are not available.
+
+        Training used:
+            pooled_pred = stack([o.mean(dim=[2,3]) for o in attr_outputs]).mean(dim=0)
+            BCEWithLogitsLoss(pooled_pred, targets)  ← sigmoid applied internally
+
+        Inference must match: average logits over spatial dims, then over scales,
+        then apply sigmoid — NOT sigmoid-first-then-average (Jensen's inequality
+        makes the latter systematically lower → disease suppressed).
+
+        Per-tooth discrimination:
+            Rather than broadcasting one image-level score to every tooth (which
+            dilutes a single diseased tooth's signal across 30 healthy spatial
+            cells), we sample each scale's feature map at the detection-box centre.
+            This is consistent with backbone spatial structure even though training
+            used global pooling.
         """
         if not self._fpn_features or self._attr_heads is None:
             return None
@@ -332,21 +377,58 @@ class YOLOrthoPredictor:
                 if not valid_features:
                     return None
 
-                # Get attribute predictions per scale
+                # attr_outputs: list of 3 tensors, each (1, 4, H_f, W_f)
                 attr_outputs = self._attr_heads(valid_features)
 
                 if not attr_outputs or det_result.boxes is None:
                     return None
 
                 N = len(det_result.boxes)
-                # Use first scale (highest resolution) averaged over spatial dims
-                attr_map = torch.sigmoid(attr_outputs[0])  # (B, 4, H, W)
-                attr_avg = attr_map.mean(dim=[2, 3])       # (B, 4)
+                if N == 0:
+                    return None
 
-                # Expand to one row per detection
-                attr_np = attr_avg[0].cpu().numpy()        # (4,)
-                # Broadcast across all detections (simplified; full version matches per anchor)
-                return np.tile(attr_np, (N, 1))
+                # ── Image-level probability (logit-mean → sigmoid, matching training) ──
+                img_logit = torch.stack(
+                    [o.mean(dim=[2, 3]) for o in attr_outputs], dim=0
+                ).mean(dim=0)  # (1, 4)
+                img_prob = torch.sigmoid(img_logit)[0].cpu().numpy()  # (4,)
+                logger.info(
+                    "Attr image-level probs  [is_impacted, has_caries, has_deepcaries, has_lesion]: "
+                    "[%.3f, %.3f, %.3f, %.3f]",
+                    *img_prob.tolist(),
+                )
+
+                # ── Per-tooth spatial sampling at detection-box centre ─────────────────
+                # boxes.xywhn: normalised [cx, cy, w, h] relative to original image
+                boxes_xywhn = det_result.boxes.xywhn.cpu().numpy()  # (N, 4)
+                cx_norm = boxes_xywhn[:, 0]  # (N,)
+                cy_norm = boxes_xywhn[:, 1]  # (N,)
+
+                per_tooth_logits = []
+                for i in range(N):
+                    scale_samples = []
+                    for feat in attr_outputs:
+                        # feat: (1, 4, H_f, W_f)  ← logits (no sigmoid yet)
+                        _, _, H_f, W_f = feat.shape
+                        xf = max(0, min(int(cx_norm[i] * W_f), W_f - 1))
+                        yf = max(0, min(int(cy_norm[i] * H_f), H_f - 1))
+                        scale_samples.append(feat[0, :, yf, xf])  # (4,) logits
+
+                    # Average logits across scales (matching training normalisation)
+                    tooth_logit = torch.stack(scale_samples, dim=0).mean(dim=0)  # (4,)
+                    per_tooth_logits.append(tooth_logit)
+
+                per_tooth_logits_t = torch.stack(per_tooth_logits, dim=0)  # (N, 4)
+                per_tooth_probs = torch.sigmoid(per_tooth_logits_t).cpu().numpy()  # (N, 4)
+
+                logger.info(
+                    "Attr per-tooth probs range  min=[%.3f, %.3f, %.3f, %.3f]"
+                    "  max=[%.3f, %.3f, %.3f, %.3f]",
+                    *per_tooth_probs.min(axis=0).tolist(),
+                    *per_tooth_probs.max(axis=0).tolist(),
+                )
+
+                return per_tooth_probs
 
         except Exception as e:
             logger.warning("Attribute head inference failed: %s", e)

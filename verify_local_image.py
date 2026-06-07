@@ -85,12 +85,17 @@ def main():
              "Auto-searched in weights directory and its parent if omitted."
     )
     parser.add_argument(
-        "--conf", type=float, default=0.25,
+        "--conf", type=float, default=0.1,
         help="Detection confidence threshold (default: 0.25)."
     )
     parser.add_argument(
         "--iou", type=float, default=0.45,
         help="NMS IoU threshold (default: 0.45)."
+    )
+    parser.add_argument(
+        "--attr-threshold", type=float, default=0.3,
+        help="Disease attribute probability threshold (default: 0.3). "
+             "Lower values increase disease sensitivity."
     )
     parser.add_argument(
         "--device", default="cpu",
@@ -141,11 +146,14 @@ def main():
         device=args.device,
         conf_threshold=args.conf,
         iou_threshold=args.iou,
+        attr_threshold=args.attr_threshold,
         img_size=(640, 1280),
         attr_weights_path=args.attr_weights,
     )
 
     save = not args.no_save
+    logger.info("Attr threshold: %.2f", args.attr_threshold)
+
     results = predictor.predict(
         input_path=str(img_path),
         output_dir=effective_save_dir if save else None,
@@ -158,6 +166,7 @@ def main():
         print(f"\n{'='*60}")
         print(f"Image   : {img_name}")
         print(f"Teeth detected: {len(teeth)}")
+        print(f"Attr threshold : {args.attr_threshold}")
         print(f"{'='*60}")
 
         if not teeth:
@@ -173,9 +182,16 @@ def main():
 
         for tooth in sorted(teeth, key=lambda t: t.fdi):
             disease_str = ", ".join(tooth.diseases) if tooth.diseases else "Healthy"
+            # Show raw attribute probabilities for each tooth to aid threshold tuning
+            attr_raw = (
+                f"  [imp={tooth.is_impacted and 1 or 0}  "
+                f"car={tooth.has_caries and 1 or 0}  "
+                f"deep={tooth.has_deepcaries and 1 or 0}  "
+                f"les={tooth.has_lesion and 1 or 0}]"
+            )
             print(
                 f"  FDI {tooth.fdi:>2}  ({tooth.fdi_name:<35})  "
-                f"conf={tooth.conf:.2f}  {disease_str}"
+                f"conf={tooth.conf:.2f}  {disease_str:<25}{attr_raw}"
             )
 
     # ── Show image if requested ───────────────────────────────────────────────
