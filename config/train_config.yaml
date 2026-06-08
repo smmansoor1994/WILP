@@ -57,6 +57,14 @@ training:
   pseudo_label_conf: 0.5     # Min confidence to accept pseudo label
   pseudo_model: null         # Path to trained model for pseudo labeling (auto-filled)
 
+  # Disease attribute pos_weight for Phase 2b BCEWithLogitsLoss.
+  # Counteracts class imbalance (most teeth are healthy → label=0).
+  # The trainer auto-computes this from the dataset if left null.
+  # To override, set a list of 4 values: [impacted, caries, deepcaries, lesion].
+  # Rule of thumb: ~(#healthy_teeth / #diseased_teeth) per attribute.
+  # Example DENTEX estimates: impacted≈5, caries≈3, deepcaries≈8, lesion≈5.
+  attr_pos_weight: null      # null = auto-computed from dataset (recommended)
+
   # Validation interval (evaluate every N epochs)
   val_interval: 5
 

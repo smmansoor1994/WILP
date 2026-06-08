@@ -85,9 +85,11 @@ def main():
              "Auto-searched in weights directory and its parent if omitted."
     )
     parser.add_argument(
-        "--conf", type=float, default=0.25,
-        help="Detection confidence threshold (default: 0.1). "
-             "Lower = more teeth detected; raise to reduce false positives."
+        "--conf", type=float, default=0.10,
+        help="Detection confidence threshold (default: 0.10). "
+             "YOLOrtho has 32 FDI classes so per-class confidence is naturally "
+             "lower than binary detectors — use 0.05-0.15 to see all teeth. "
+             "Raise toward 0.25 to reduce false positives."
     )
     parser.add_argument(
         "--iou", type=float, default=0.45,

@@ -237,6 +237,62 @@ class YOLOrthoTrainer:
             shutil.copy2(phase2_best, final_dst)
             logger.info("Final weights saved to '%s'.", final_dst)
 
+def _compute_attr_pos_weight(dataset) -> List[float]:
+    """Compute per-attribute positive-class weights from dataset label statistics.
+
+    For each of the 4 binary disease attributes (impacted, caries, deepcaries, lesion),
+    counts positives and negatives across all data_type==2 samples and returns
+    neg_count / pos_count (clamped to [1.0, 20.0]) as the pos_weight.
+
+    A pos_weight of W means a false negative (missed disease) is penalised W× more
+    than a false positive, counteracting the class imbalance where most teeth are
+    healthy (label=0).
+
+    Falls back to [5, 3, 8, 5] if dataset scan fails or has no disease samples.
+    """
+    FALLBACK = [5.0, 3.0, 8.0, 5.0]
+    try:
+        import numpy as np
+        pos_counts = np.zeros(4, dtype=np.float64)
+        neg_counts = np.zeros(4, dtype=np.float64)
+        for img_path in dataset.image_paths:
+            lbl_path = dataset.labels_dir / (img_path.stem + ".txt")
+            if not lbl_path.exists():
+                continue
+            rows = np.loadtxt(str(lbl_path), ndmin=2)
+            if rows.shape[1] < 10:
+                continue
+            data_types = rows[:, 9]
+            mask = data_types == 2
+            if not mask.any():
+                continue
+            attrs = rows[mask, 5:9]   # (N, 4) — impacted, caries, deepcaries, lesion
+            pos_counts += (attrs == 1).sum(axis=0)
+            neg_counts += (attrs == 0).sum(axis=0)
+
+        total = pos_counts + neg_counts
+        if total.sum() == 0:
+            logger.warning("No data_type==2 samples found; using fallback pos_weight=%s", FALLBACK)
+            return FALLBACK
+
+        pw = []
+        for i, (p, n) in enumerate(zip(pos_counts, neg_counts)):
+            if p == 0:
+                pw.append(FALLBACK[i])   # attribute never seen → use fallback
+            else:
+                pw.append(float(np.clip(n / p, 1.0, 20.0)))
+        logger.info(
+            "Disease label counts  pos=%s  neg=%s  → pos_weight=%s",
+            pos_counts.astype(int).tolist(),
+            neg_counts.astype(int).tolist(),
+            [round(v, 2) for v in pw],
+        )
+        return pw
+    except Exception as exc:
+        logger.warning("pos_weight computation failed (%s); using fallback %s", exc, FALLBACK)
+        return FALLBACK
+
+
     def _train_attribute_heads(self, base_weights: str) -> None:
         """Fine-tune only the attribute heads with the detection backbone frozen.
 
@@ -327,7 +383,22 @@ class YOLOrthoTrainer:
         )
 
         optimizer = AdamW(model.attr_heads.parameters(), lr=1e-3, weight_decay=1e-4)
-        attr_loss_fn = AttributeBCELoss(num_attrs=4, loss_weight=8.0)
+
+        # Compute per-attribute pos_weight from dataset to counteract class imbalance.
+        # Most teeth are healthy (label=0); without weighting, BCE drives the model to
+        # always predict 0 (trivial solution, best_loss → 0).  pos_weight = neg/pos
+        # ensures each positive (diseased) sample receives proportionally more gradient.
+        # Use config override if provided, else compute from data.
+        _pw_cfg = self.train_cfg.get("attr_pos_weight", None)
+        if _pw_cfg and len(_pw_cfg) == 4:
+            pos_weight = [float(v) for v in _pw_cfg]
+            logger.info("attr pos_weight from config: %s", pos_weight)
+        else:
+            pos_weight = _compute_attr_pos_weight(dataset)
+            logger.info("attr pos_weight computed from dataset: %s", pos_weight)
+
+        attr_loss_fn = AttributeBCELoss(num_attrs=4, loss_weight=8.0, pos_weight=pos_weight)
+        attr_loss_fn.to(device)
         # Scheduler initialized after first optimizer.step() to avoid PyTorch warning
         # about scheduler.step() being called before optimizer.step()
         scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)

@@ -5955,3 +5955,10 @@ Traceback (most recent call last):
     super().__init__(open(name, mode))  # noqa: SIM115
                      ~~~~^^^^^^^^^^^^
 FileNotFoundError: [Errno 2] No such file or directory: 'outputs\\runs\\phase1\\weights\\best.pt'
+2026-06-08 08:42:00 [INFO] yolortho.main — YOLOrtho — Mode: full | Device: cpu
+2026-06-08 08:42:00 [INFO] yolortho.main — ======================================================================
+2026-06-08 08:42:00 [INFO] yolortho.main —   YOLOrtho FULL PIPELINE
+2026-06-08 08:42:00 [INFO] yolortho.main —   Paper: https://arxiv.org/abs/2308.05967
+2026-06-08 08:42:00 [INFO] yolortho.main —   Dataset: DENTEX (on disk at --dentex-root)
+2026-06-08 08:42:00 [INFO] yolortho.main — ======================================================================
+2026-06-08 08:42:00 [ERROR] yolortho.main — --dentex-root is required for full pipeline. Example: --dentex-root D:/WILP/sem-4/Dataset/DENTEX/DENTEXsample

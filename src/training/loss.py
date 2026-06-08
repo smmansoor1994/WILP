@@ -44,13 +44,36 @@ class AttributeBCELoss(nn.Module):
     Args:
         num_attrs:     Number of attributes (4).
         loss_weight:   Weight applied to the total attribute loss (default 8.0).
+        pos_weight:    Per-attribute positive-class weight for BCEWithLogitsLoss.
+                       Counteracts class imbalance (most teeth are healthy → label=0).
+                       A value of W means a false negative is penalised W× more than
+                       a false positive.  Rule of thumb: W ≈ (#negatives / #positives).
+                       If None, defaults to [5, 3, 8, 5] for
+                       [impacted, caries, deepcaries, lesion] based on DENTEX prevalence.
     """
 
-    def __init__(self, num_attrs: int = 4, loss_weight: float = 8.0):
+    def __init__(
+        self,
+        num_attrs: int = 4,
+        loss_weight: float = 8.0,
+        pos_weight: Optional[List[float]] = None,
+    ):
         super().__init__()
         self.num_attrs = num_attrs
         self.loss_weight = loss_weight
-        # Reduction='none' so we can apply masking manually
+        # Default pos_weight estimated from DENTEX disease set prevalence:
+        #   impacted  ~15%  → ratio ≈ 5.7 → use 5
+        #   caries    ~25%  → ratio ≈ 3.0 → use 3
+        #   deepcaries ~8%  → ratio ≈ 11.5 → use 8
+        #   lesion    ~15%  → ratio ≈ 5.7 → use 5
+        # These prevent the trivial "always predict healthy" collapse.
+        _pw = pos_weight if pos_weight is not None else [5.0, 3.0, 8.0, 5.0]
+        pw_tensor = torch.tensor(_pw, dtype=torch.float32)
+        # Register as buffer so it moves to the correct device automatically
+        # when loss_fn.to(device) is called.
+        self.register_buffer("_pos_weight", pw_tensor)
+        # Reduction='none' so we can apply masking manually;
+        # pos_weight is passed at forward() time after device placement.
         self.bce = nn.BCEWithLogitsLoss(reduction="none")
 
     def forward(
@@ -76,8 +99,20 @@ class AttributeBCELoss(nn.Module):
             # when a batch contains no disease-annotated (data_type=2) samples.
             return pred_attrs.sum() * 0.0
 
-        # BCE elementwise: (N, num_attrs)
-        bce_loss = self.bce(pred_attrs, target_attrs.float())
+        # BCE elementwise with pos_weight applied manually so the weight tensor
+        # stays on the correct device (registered as buffer via _pos_weight).
+        # pos_weight: (num_attrs,) → broadcast to (N, num_attrs)
+        # Effective loss per element:
+        #   label=1: pos_weight * -log(sigmoid(logit))
+        #   label=0:             -log(1 - sigmoid(logit))
+        # This upweights false negatives (missed diseases), preventing the
+        # trivial "always predict healthy" collapse caused by class imbalance.
+        target_f = target_attrs.float()
+        pw = self._pos_weight.to(pred_attrs.device)          # (num_attrs,)
+        bce_loss = (
+            (1 - target_f) * pred_attrs
+            - (1 + (pw - 1) * target_f) * F.logsigmoid(pred_attrs)
+        )   # numerically equivalent to BCEWithLogitsLoss(pos_weight=pw), shape (N, num_attrs)
 
         # Apply per-sample mask (broadcast over attribute dim)
         masked = bce_loss * mask.unsqueeze(1)  # (N, num_attrs)

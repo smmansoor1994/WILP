@@ -144,32 +144,40 @@ Use `verify_local_image.py` to run inference on any local dental X-ray and displ
 ### Syntax
 ```powershell
 python verify_local_image.py `
-  --image   <path to panoramic X-ray (.jpg / .png)> `
-  --weights <path to .pt model weights> `
-  --device  cpu `
-  --conf    0.10 `
-  --iou     0.45 `
-  --save-dir <folder to save results> `
-  --show `
-  --no-save
-```
-
-### Example — basic run with display
-```powershell
-python verify_local_image.py `
-  --image "C:\Users\Z0046KUF\Downloads\pnmc.jpg" `
-  --weights "D:\WILP\Workingcode\models\yolortho_best_main_1epoch.pt" `
-  --device cpu `
+  --image          <path to panoramic X-ray (.jpg / .png)> `
+  --weights        <path to yolortho_best.pt> `
+  --attr-weights   <path to attr_best.pt> `
+  --device         cpu `
+  --conf           0.25 `
+  --iou            0.45 `
+  --attr-threshold 0.3 `
+  --attr-mode      per_tooth `
+  --save-dir       <folder to save results> `
   --show
 ```
 
-### Example — save results to a custom folder
+### Example — full run with disease detection (recommended after retraining)
+```powershell
+python verify_local_image.py `
+  --image "D:\WILP\sem-4\Dataset\DENTEX\DENTEX\training_data\quadrant-enumeration-disease\xrays\train_10.png" `
+  --weights "D:\WILP\Workingcode\Baseline\WILP\weights\yolortho_best.pt" `
+  --attr-weights "D:\WILP\Workingcode\Baseline\WILP\weights\attr_best.pt" `
+  --device cuda `
+  --attr-threshold 0.3 `
+  --save-dir "C:\Users\Z0046KUF\Downloads\yolortho_results" `
+  --show
+```
+
+> **train_10 sanity check**: this image has 5 teeth with `has_caries=1` in the ground truth.  
+> After a correct retrain you should see those 5 teeth labeled `D: Caries`.  
+> If all teeth still show `D: Healthy`, check the training log for `Phase 2b` lines with `num_attr_samples > 0`.
+
+### Example — basic run (detection only, no attr-weights)
 ```powershell
 python verify_local_image.py `
   --image "C:\Users\Z0046KUF\Downloads\pnmc.jpg" `
-  --weights "D:\WILP\Workingcode\models\yolortho_best_main_1epoch.pt" `
+  --weights "D:\WILP\Workingcode\Baseline\WILP\weights\yolortho_best.pt" `
   --device cpu `
-  --save-dir "C:\Users\Z0046KUF\Downloads\yolortho_results" `
   --show
 ```
 
@@ -177,9 +185,11 @@ python verify_local_image.py `
 ```powershell
 python verify_local_image.py `
   --image "C:\Users\Z0046KUF\Downloads\pnmc.jpg" `
-  --weights "D:\WILP\Workingcode\models\yolortho_best_main_1epoch.pt" `
+  --weights "D:\WILP\Workingcode\Baseline\WILP\weights\yolortho_best.pt" `
+  --attr-weights "D:\WILP\Workingcode\Baseline\WILP\weights\attr_best.pt" `
   --device cpu `
-  --conf 0.05 `
+  --conf 0.10 `
+  --attr-threshold 0.3 `
   --save-dir "C:\Users\Z0046KUF\Downloads\yolortho_results" `
   --show
 ```
@@ -189,14 +199,26 @@ python verify_local_image.py `
 | Option | Default | Description |
 |---|---|---|
 | `--image` | *(required)* | Path to panoramic X-ray (`.jpg` / `.png`) |
-| `--weights <.pt file>` | auto-detected | Path to trained model weights `.pt` file |
+| `--weights` | auto-detected | `yolortho_best.pt` — detection + FDI enumeration model |
+| `--attr-weights` | auto-searched | `attr_best.pt` — disease attribute head weights |
 | `--device` | `cpu` | `cpu` or `cuda` (GPU) |
-| `--conf` | `0.10` | Confidence threshold — lower = more detections |
+| `--conf` | `0.25` | Detection confidence threshold — lower = more teeth detected |
 | `--iou` | `0.45` | NMS IoU threshold |
-| `--save-dir` | `outputs/predictions/` | Custom folder to save annotated image + JSON |
+| `--attr-threshold` | `0.3` | Disease probability threshold — lower = more sensitive to disease; raise to `0.45` if too many false positives |
+| `--attr-mode` | `per_tooth` | `per_tooth` for retrained models; `global_avg` for pre-June-2026 weights |
+| `--save-dir` | `outputs/predictions/` | Folder to save annotated image + JSON results |
 | `--output-dir` | `outputs/predictions/` | Fallback save folder (used if `--save-dir` not set) |
 | `--show` | off | Display annotated image via matplotlib |
 | `--no-save` | off | Skip saving all output files |
+
+### `--attr-threshold` tuning guide
+
+| Scenario | Recommended value |
+|---|---|
+| Initial verification on training images | `0.3` |
+| Too many false positives (healthy teeth flagged as diseased) | `0.40`–`0.45` |
+| Still missing diseases on known-diseased training images | `0.20` |
+| Final evaluation / paper reporting | Tune on validation set |
 
 ### Auto weight search (if `--weights` is omitted)
 The script searches for weights in this order:
