@@ -411,17 +411,54 @@ class YOLOrthoPredictor:
                     )
                 else:
                     # ── Mode: per_tooth (matches per-tooth spatial training) ───────────
+                    # Compute letterbox parameters used by ultralytics.predict():
+                    # ultralytics resizes preserving aspect ratio (scale = min)
+                    # then pads to a multiple of stride (32) — so the actual
+                    # letterboxed image size depends on the input aspect ratio.
+                    # We recover this by inspecting the largest feature map (P3,
+                    # stride 8) which gives the letterboxed image dimensions.
+                    P3_STRIDE = 8
+                    H_f_p3 = attr_outputs[0].shape[2]
+                    W_f_p3 = attr_outputs[0].shape[3]
+                    effective_h = H_f_p3 * P3_STRIDE
+                    effective_w = W_f_p3 * P3_STRIDE
+
+                    target_h_default, target_w_default = self.img_size
+                    orig_h, orig_w = (
+                        det_result.orig_shape
+                        if det_result.orig_shape is not None
+                        else (effective_h, effective_w)
+                    )
+
+                    # Same scaling factor ultralytics uses
+                    lb_scale = min(
+                        target_h_default / orig_h, target_w_default / orig_w
+                    )
+                    new_h_unpad = orig_h * lb_scale
+                    new_w_unpad = orig_w * lb_scale
+                    pad_top_inf = (effective_h - new_h_unpad) / 2
+                    pad_left_inf = (effective_w - new_w_unpad) / 2
+
+                    # boxes.xywhn is normalised to ORIGINAL image dimensions.
+                    # Convert each detection's centre to its anatomical pixel
+                    # position in the letterboxed image, then sample features.
                     boxes_xywhn = det_result.boxes.xywhn.cpu().numpy()  # (N, 4)
                     cx_norm = boxes_xywhn[:, 0]
                     cy_norm = boxes_xywhn[:, 1]
+
+                    cx_lb_pixel = cx_norm * orig_w * lb_scale + pad_left_inf
+                    cy_lb_pixel = cy_norm * orig_h * lb_scale + pad_top_inf
 
                     per_tooth_logits = []
                     for i in range(N):
                         scale_samples = []
                         for feat in attr_outputs:
                             _, _, H_f, W_f = feat.shape
-                            xf = max(0, min(int(cx_norm[i] * W_f), W_f - 1))
-                            yf = max(0, min(int(cy_norm[i] * H_f), H_f - 1))
+                            # feature_idx = pixel * (feat_size / effective_size)
+                            xf = int(cx_lb_pixel[i] * W_f / effective_w)
+                            yf = int(cy_lb_pixel[i] * H_f / effective_h)
+                            xf = max(0, min(xf, W_f - 1))
+                            yf = max(0, min(yf, H_f - 1))
                             scale_samples.append(feat[0, :, yf, xf])  # (4,) logits
                         tooth_logit = torch.stack(scale_samples, dim=0).mean(dim=0)
                         per_tooth_logits.append(tooth_logit)

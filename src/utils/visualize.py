@@ -39,6 +39,7 @@ DISEASE_ABBREV = {
 }
 
 HEALTHY_COLOR = (100, 180, 100)  # muted green — healthy tooth
+DISEASE_COLOR = (40, 40, 200)    # red — diseased tooth (used in dental chart)
 
 
 def draw_teeth_detections(

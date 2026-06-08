@@ -42,6 +42,54 @@ LABEL_COLS = 10   # class, cx, cy, w, h, attr×4, data_type
 IMG_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
 
 
+def _letterbox(
+    image: np.ndarray,
+    target_size: Tuple[int, int],
+    color: Tuple[int, int, int] = (114, 114, 114),
+) -> Tuple[np.ndarray, float, int, int]:
+    """Resize image preserving aspect ratio, then pad to ``target_size``.
+
+    Mirrors ultralytics' ``LetterBox(new_shape=target_size, auto=False)`` so that
+    Phase 2b training-time preprocessing matches inference-time letterboxing.
+
+    Args:
+        image:       HxWx3 uint8 image.
+        target_size: (target_h, target_w).
+        color:       RGB padding colour (default ultralytics gray).
+
+    Returns:
+        (padded_image, scale, pad_top, pad_left)
+        - padded_image: target_h × target_w × 3 uint8
+        - scale:        ratio applied to both H and W (= min(target_h/H, target_w/W))
+        - pad_top:      pixels of padding added at the top
+        - pad_left:     pixels of padding added on the left
+    """
+    h_orig, w_orig = image.shape[:2]
+    h_target, w_target = target_size
+
+    scale = min(h_target / h_orig, w_target / w_orig)
+    new_h = int(round(h_orig * scale))
+    new_w = int(round(w_orig * scale))
+
+    if (new_h, new_w) != (h_orig, w_orig):
+        resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    else:
+        resized = image
+
+    pad_h_total = h_target - new_h
+    pad_w_total = w_target - new_w
+    pad_top = pad_h_total // 2
+    pad_bottom = pad_h_total - pad_top
+    pad_left = pad_w_total // 2
+    pad_right = pad_w_total - pad_left
+
+    padded = cv2.copyMakeBorder(
+        resized, pad_top, pad_bottom, pad_left, pad_right,
+        cv2.BORDER_CONSTANT, value=color,
+    )
+    return padded, scale, pad_top, pad_left
+
+
 class YOLOrthoDataset(Dataset):
     """Dataset loading panoramic X-ray images + extended YOLO labels.
 
@@ -109,9 +157,23 @@ class YOLOrthoDataset(Dataset):
         # ── Load labels ───────────────────────────────────────────────────────
         labels = self._load_labels(lbl_path)
 
-        # ── Resize image to target size ───────────────────────────────────────
-        h, w = self.img_size
-        image = cv2.resize(image, (w, h), interpolation=cv2.INTER_LINEAR)
+        # ── Letterbox image to target size (matches ultralytics' inference) ──
+        # Stretching with cv2.resize destroys aspect ratio; the FPN features
+        # would then differ between Phase 2b training (stretched) and
+        # inference (letterboxed) → attr heads predict at wrong anatomical
+        # locations.  Letterboxing both training and inference fixes this.
+        h_orig, w_orig = image.shape[:2]
+        h_target, w_target = self.img_size  # (H, W)
+        image, scale, pad_top, pad_left = _letterbox(image, self.img_size)
+
+        # Transform labels from "normalised-to-original-image" to
+        # "normalised-to-letterboxed-image" coordinates.
+        if len(labels) > 0:
+            labels = labels.copy()
+            labels[:, 1] = (labels[:, 1] * w_orig * scale + pad_left) / w_target  # cx
+            labels[:, 2] = (labels[:, 2] * h_orig * scale + pad_top) / h_target   # cy
+            labels[:, 3] = labels[:, 3] * w_orig * scale / w_target               # w
+            labels[:, 4] = labels[:, 4] * h_orig * scale / h_target               # h
 
         # ── Augmentation ──────────────────────────────────────────────────────
         if self.augment and len(labels) > 0:

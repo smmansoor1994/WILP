@@ -94,7 +94,7 @@ def apply_linear_sum_assignment(
     confidences: np.ndarray,    # (N,)    — detection confidences
     attr_probs: Optional[np.ndarray] = None,  # (N, 4) — attribute probabilities [0,1]
     conf_threshold: float = 0.25,
-    attr_threshold: float = 0.5,
+    attr_threshold: float = 0.3,
 ) -> List[ToothDetection]:
     """Apply the linear sum assignment to enforce unique FDI assignment.
 
@@ -226,7 +226,7 @@ def postprocess_yolo_output(
     results,                         # ultralytics Results object
     attr_probs: Optional[np.ndarray] = None,   # (N, 4) attribute probabilities
     conf_threshold: float = 0.25,
-    attr_threshold: float = 0.5,
+    attr_threshold: float = 0.3,
     img_shape: Optional[tuple] = None,
 ) -> List[ToothDetection]:
     """Convert ultralytics YOLO output to YOLOrtho tooth detections.

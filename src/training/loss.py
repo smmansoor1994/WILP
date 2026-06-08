@@ -72,7 +72,9 @@ class AttributeBCELoss(nn.Module):
         mask = (data_types == 2).float()  # (N,)
 
         if mask.sum() == 0:
-            return torch.tensor(0.0, device=pred_attrs.device, dtype=pred_attrs.dtype)
+            # Return a differentiable zero so that loss.backward() does not crash
+            # when a batch contains no disease-annotated (data_type=2) samples.
+            return pred_attrs.sum() * 0.0
 
         # BCE elementwise: (N, num_attrs)
         bce_loss = self.bce(pred_attrs, target_attrs.float())

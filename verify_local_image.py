@@ -85,7 +85,7 @@ def main():
              "Auto-searched in weights directory and its parent if omitted."
     )
     parser.add_argument(
-        "--conf", type=float, default=0.1,
+        "--conf", type=float, default=0.25,
         help="Detection confidence threshold (default: 0.1). "
              "Lower = more teeth detected; raise to reduce false positives."
     )

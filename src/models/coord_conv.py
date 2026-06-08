@@ -220,10 +220,16 @@ def _replace_conv_recursive(
                 bias=child.bias is not None,
                 with_r=with_r,
             )
-            # Copy existing weights (they fit since CoordConv just adds 2 extra input channels)
-            # The original weight covers in_channels; extra channels initialized to zero
+            # Copy existing weights for the original input channels.
+            # IMPORTANT: zero the extra coord-channel weights so the CoordConv
+            # behaves identically to the original Conv2d at initialisation.
+            # PyTorch's default kaiming_uniform_ init for those channels would
+            # otherwise inject random noise into every FPN feature map, causing
+            # the attr heads to learn on corrupted features during Phase 2b
+            # while seeing clean features at inference (no CoordConv).
             with torch.no_grad():
                 new_conv.conv.weight[:, :child.in_channels] = child.weight
+                new_conv.conv.weight[:, child.in_channels:].zero_()  # BUG FIX: zero coord channels
                 if child.bias is not None:
                     new_conv.conv.bias.copy_(child.bias)
             setattr(module, name, new_conv)

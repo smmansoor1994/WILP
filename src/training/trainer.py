@@ -26,7 +26,7 @@ Usage:
 import logging
 import shutil
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 import torch
 import yaml
@@ -94,6 +94,38 @@ class YOLOrthoTrainer:
         self._train_phase2(pretrain_weights=str(phase1_weights))
 
         logger.info("Training complete. Best weights saved to '%s'.", self.save_dir)
+
+    def train_attr_only(self, base_weights: Optional[str] = None) -> None:
+        """Re-run Phase 2b (attribute head training) only, using existing backbone weights.
+
+        Use this to retrain the attribute heads after a crash or when the existing
+        attr_best.pt was trained with the no_grad bug (all predictions = healthy).
+
+        Args:
+            base_weights: Path to the detection backbone weights to freeze during
+                          attribute head training. Defaults to the phase2 best.pt,
+                          falling back to phase1 best.pt.
+        """
+        if base_weights is None:
+            # Prefer phase2 best, fall back to phase1
+            candidates = [
+                self.save_dir / "phase2" / "weights" / "best.pt",
+                self.save_dir / "phase1" / "weights" / "best.pt",
+                self.project_root / "weights" / "yolortho_best.pt",
+            ]
+            base_weights_path = next((p for p in candidates if p.exists()), None)
+            if base_weights_path is None:
+                raise FileNotFoundError(
+                    "No backbone weights found. Tried: "
+                    + ", ".join(str(p) for p in candidates)
+                    + "\nProvide --weights or run --mode train first."
+                )
+            base_weights = str(base_weights_path)
+        logger.info("=" * 60)
+        logger.info("PHASE 2b ONLY: Training attribute heads")
+        logger.info("Backbone: %s", base_weights)
+        logger.info("=" * 60)
+        self._train_attribute_heads(base_weights=base_weights)
 
     def train_phase1_only(self) -> None:
         """Run Phase 1 only (detection pre-training). Used by the full pipeline
@@ -301,14 +333,21 @@ class YOLOrthoTrainer:
         scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
         optimizer_has_stepped = False
 
-        # Set train mode only on pure nn.Module components, bypassing the
-        # ultralytics YOLO wrapper whose .train() method is overridden and
-        # does not accept the bool `mode` argument that PyTorch passes internally.
-        model.base_model.model.train()
+        # Keep the frozen backbone in EVAL mode so that BatchNorm layers use
+        # their accumulated running_mean/running_var (same statistics used at
+        # inference time).  If the backbone were in train() mode its BN layers
+        # would normalise using per-batch statistics, producing FPN features that
+        # differ from inference features → attr heads learn wrong thresholds.
+        # Only the trainable attribute heads are put into train mode.
+        model.base_model.model.eval()
         model.attr_heads.train()
         best_loss = float("inf")
         # Save attr_best.pt both alongside phase2 weights and in top-level weights/
         best_path = self.save_dir / "phase2" / "weights" / "attr_best.pt"
+        # Ensure the directory exists — it may be absent when running --mode train_attr
+        # on a machine where Phase 2 detection training hasn't written files yet
+        # (e.g. using pre-downloaded weights from Colab).
+        best_path.parent.mkdir(parents=True, exist_ok=True)
         weights_attr_path = self.project_root / "weights" / "attr_best.pt"
         weights_attr_path.parent.mkdir(exist_ok=True)
 

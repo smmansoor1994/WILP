@@ -281,14 +281,18 @@ def _process_unlabelled(
 
 # ─── Helper Functions ─────────────────────────────────────────────────────────
 
-def _find_part3_stems(lbl_dir: Path) -> List[str]:
-    """Return stems of label files that contain at least one data_type=2 row."""
-    part3 = []
+def _find_part3_stems(lbl_dir: Path) -> set:
+    """Return stems (as a set) of label files that contain at least one data_type=2 row.
+
+    Returns a set instead of a list for O(1) membership tests in the calling loop
+    (avoids O(n²) scan when checking `stem not in part3_stems` for every label file).
+    """
+    part3: set = set()
     for lbl_path in lbl_dir.glob("*.txt"):
         labels = _load_labels(lbl_path)
         for row in labels:
             if len(row) >= 10 and int(row[9]) == 2:
-                part3.append(lbl_path.stem)
+                part3.add(lbl_path.stem)
                 break
     return part3
 
@@ -410,8 +414,16 @@ def _xywh_to_xyxy(box: np.ndarray) -> Tuple[float, float, float, float]:
 
 
 def _find_latest_weights() -> Optional[Path]:
-    """Search outputs/runs for the most recently saved best.pt."""
-    runs_dir = Path("outputs/runs")
+    """Search outputs/runs for the most recently saved best.pt.
+
+    Uses the pseudo_label.py module location to resolve the project root,
+    avoiding CWD-dependent relative paths that break when main.py is invoked
+    from a directory other than the WILP project root.
+    """
+    # Resolve project root from this file's location:
+    # src/data/pseudo_label.py → src/data/ → src/ → project_root/
+    _module_root = Path(__file__).resolve().parent.parent.parent
+    runs_dir = _module_root / "outputs" / "runs"
     if not runs_dir.exists():
         return None
     weight_files = sorted(runs_dir.rglob("best.pt"), key=lambda p: p.stat().st_mtime)

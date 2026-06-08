@@ -41,6 +41,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# The log FileHandler below is created at import time and writes to
+# outputs/yolortho.log, so that directory must exist first. On a fresh checkout
+# (e.g. a clean Colab clone) outputs/ does not yet exist → without this the
+# program crashes before any --mode can run.
+(PROJECT_ROOT / "outputs").mkdir(parents=True, exist_ok=True)
+
 # ─── Logging configuration ────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -67,7 +73,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["preprocess", "pseudo_label", "train",
+        choices=["preprocess", "pseudo_label", "train", "train_attr",
                  "evaluate", "predict", "full"],
         default="full",
         help="Pipeline stage to execute (default: full — runs all stages).",
@@ -189,6 +195,32 @@ def stage_pseudo_label(args: argparse.Namespace) -> None:
         weights_path=_find_phase1_weights(),
         device=args.device,
     )
+
+
+def stage_train_attr(args: argparse.Namespace) -> None:
+    """Stage 4b: Re-train attribute heads only (Phase 2b).
+
+    Use this when attr_best.pt is missing or was trained with the no_grad bug
+    (all disease predictions show ~0.001 probability / everything healthy).
+
+    Requires:
+      - Phase 2 best.pt backbone weights (or supply --weights)
+      - data/processed/images/train/  populated with training images
+      - data/processed/labels_ext/train/  populated (disease labels)
+    """
+    _section_header("STAGE 4b — Train Attribute Heads Only (Phase 2b)")
+    logger.info("Config: %s", args.config)
+    logger.info("Device: %s", args.device)
+
+    from src.training.trainer import YOLOrthoTrainer
+    trainer = YOLOrthoTrainer(
+        config_path=args.config,
+        resume=False,
+        device=args.device,
+    )
+    # If user supplied --weights, use that as the backbone; otherwise auto-detect
+    base_weights = args.weights if args.weights else None
+    trainer.train_attr_only(base_weights=base_weights)
 
 
 def stage_train(args: argparse.Namespace) -> None:
@@ -410,6 +442,7 @@ def main() -> None:
         "preprocess":   stage_preprocess,
         "pseudo_label": stage_pseudo_label,
         "train":        stage_train,
+        "train_attr":   stage_train_attr,
         "evaluate":     stage_evaluate,
         "predict":      stage_predict,
         "full":         run_full_pipeline,
