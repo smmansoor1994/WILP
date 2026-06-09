@@ -1,15 +1,17 @@
 """
-main.py - improvements
-=======
-YOLOrtho: A Unified Framework for Teeth Enumeration and Dental Disease Detection.
+main.py — ARCHON Pipeline Entry Point
+======================================
+ARCHON: Arch-Contextualized Hierarchical Orthodontic Network
+for Severity-Aware Dental Radiograph Analysis.
 
-Paper:   https://arxiv.org/abs/2308.05967
-Dataset: https://www.kaggle.com/competitions/dentex-challenge-2023
+Built on: ARCHON: A Unified Framework for Teeth Enumeration and Dental Disease Detection
+Paper:    https://arxiv.org/abs/2308.05967
+Dataset:  https://www.kaggle.com/competitions/dentex-challenge-2023
 
 Pipeline Modes:
   preprocess    → Convert COCO JSON annotations to YOLO format
   pseudo_label  → Generate pseudo-labels for healthy teeth (Part 3) and unlabelled images
-  train         → Train YOLOrtho (2-phase: detection + attributes)
+  train         → Train ARCHON (2-phase: detection + attributes)
   evaluate      → Evaluate model on validation set (mAP metrics)
   predict       → Run inference on image(s) with visualization
   full          → Run entire pipeline end-to-end (no download — dataset must be on disk)
@@ -19,7 +21,7 @@ Usage Examples:
   python main.py --mode preprocess --dentex-root D:/path/to/DENTEX
   python main.py --mode pseudo_label
   python main.py --mode train
-  python main.py --mode evaluate --weights weights/yolortho_best.pt
+  python main.py --mode evaluate --weights weights/archon_best.pt
   python main.py --mode predict --input data/processed/images/test/sample.jpg
 
   # ── Full pipeline ──
@@ -29,7 +31,7 @@ Usage Examples:
   python main.py --mode train --resume
 
   # ── Predict on a directory ──
-  python main.py --mode predict --input path/to/xrays/ --weights weights/yolortho_best.pt
+  python main.py --mode predict --input path/to/xrays/ --weights weights/archon_best.pt
 """
 
 import argparse
@@ -42,7 +44,7 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # The log FileHandler below is created at import time and writes to
-# outputs/yolortho.log, so that directory must exist first. On a fresh checkout
+# outputs/archon.log, so that directory must exist first. On a fresh checkout
 # (e.g. a clean Colab clone) outputs/ does not yet exist → without this the
 # program crashes before any --mode can run.
 (PROJECT_ROOT / "outputs").mkdir(parents=True, exist_ok=True)
@@ -54,18 +56,18 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(PROJECT_ROOT / "outputs" / "yolortho.log", mode="a"),
+        logging.FileHandler(PROJECT_ROOT / "outputs" / "archon.log", mode="a"),
     ],
 )
-logger = logging.getLogger("yolortho.main")
+logger = logging.getLogger("archon.main")
 
 
 # ─── Argument Parser ──────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="YOLOrtho",
-        description="YOLOrtho: Unified Teeth Enumeration + Dental Disease Detection",
+        prog="ARCHON",
+        description="ARCHON: Unified Teeth Enumeration + Dental Disease Detection",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -74,9 +76,12 @@ def parse_args() -> argparse.Namespace:
         "--mode",
         type=str,
         choices=["preprocess", "pseudo_label", "train", "train_attr",
-                 "evaluate", "predict", "full"],
+                 "train_hybrid", "evaluate", "predict", "full"],
         default="full",
-        help="Pipeline stage to execute (default: full — runs all stages).",
+        help=(
+            "Pipeline stage to execute (default: full — runs all stages). "
+            "train_hybrid: Phase 3 — train Swin+CrossAttn+SeverityHead on existing Phase 2 weights."
+        ),
     )
     parser.add_argument(
         "--dentex-root",
@@ -212,8 +217,8 @@ def stage_train_attr(args: argparse.Namespace) -> None:
     logger.info("Config: %s", args.config)
     logger.info("Device: %s", args.device)
 
-    from src.training.trainer import YOLOrthoTrainer
-    trainer = YOLOrthoTrainer(
+    from src.training.trainer import ARCHONTrainer
+    trainer = ARCHONTrainer(
         config_path=args.config,
         resume=False,
         device=args.device,
@@ -223,8 +228,46 @@ def stage_train_attr(args: argparse.Namespace) -> None:
     trainer.train_attr_only(base_weights=base_weights)
 
 
+def stage_train_hybrid(args: argparse.Namespace) -> None:
+    """Stage 4c: Train hybrid components (Phase 3).
+
+    Trains the three new architectural improvements on top of an already-trained
+    Phase 2 detection backbone (which must exist before running this mode):
+
+      A. GlobalContextEncoder  — Swin Transformer on P5 for jaw-wide dental arch context
+      B. MultiScaleFusion      — Cross-Attention: CNN local features + Swin global context
+      C. HybridMultiTaskHead   — 3-level severity heads + quadrant auxiliary classifier
+
+    The YOLOv8 detection backbone and binary attribute heads are FROZEN —
+    only the new components receive gradient updates.
+
+    Requires:
+      - outputs/runs/phase2/weights/best.pt  (or --weights to override backbone path)
+      - data/processed/labels_ext/train/     (10-column disease labels)
+
+    Produces:
+      - weights/hybrid_best.pt               (saved when validation loss improves)
+
+    Example:
+      python main.py --mode train_hybrid
+      python main.py --mode train_hybrid --weights weights/archon_best.pt
+    """
+    _section_header("STAGE 4c — Train Hybrid Components (Phase 3)")
+    logger.info("Config: %s", args.config)
+    logger.info("Device: %s", args.device)
+
+    from src.training.trainer import ARCHONHybridTrainer
+    trainer = ARCHONHybridTrainer(
+        config_path=args.config,
+        resume=False,
+        device=args.device,
+    )
+    base_weights = args.weights if args.weights else None
+    trainer.train_hybrid(base_weights=base_weights)
+
+
 def stage_train(args: argparse.Namespace) -> None:
-    """Stage 4: Train YOLOrtho with hierarchical loss.
+    """Stage 4: Train ARCHON with hierarchical loss.
 
     Two-phase training:
       Phase 1 — YOLOv8x + CoordConv on Parts 1+2 (detection only)
@@ -232,13 +275,13 @@ def stage_train(args: argparse.Namespace) -> None:
 
     Total loss = bbox(7.5) + cls(0.5) + DFL(1.5) + attr×4(8.0 each)
     """
-    _section_header("STAGE 4 — Train YOLOrtho")
+    _section_header("STAGE 4 — Train ARCHON")
     logger.info("Config: %s", args.config)
     logger.info("Device: %s", args.device)
     logger.info("Resume: %s", args.resume)
 
-    from src.training.trainer import YOLOrthoTrainer
-    trainer = YOLOrthoTrainer(
+    from src.training.trainer import ARCHONTrainer
+    trainer = ARCHONTrainer(
         config_path=args.config,
         resume=args.resume,
         device=args.device,
@@ -253,9 +296,9 @@ def stage_evaluate(args: argparse.Namespace) -> None:
       AP-Quadrant, AP-Enumeration, AP-Diagnosis (as per Dentex challenge)
       mAP@0.5, mAP@0.5:0.95
     """
-    _section_header("STAGE 5 — Evaluate YOLOrtho")
+    _section_header("STAGE 5 — Evaluate ARCHON")
 
-    weights = args.weights or str(PROJECT_ROOT / "weights" / "yolortho_best.pt")
+    weights = args.weights or str(PROJECT_ROOT / "weights" / "archon_best.pt")
     if not Path(weights).exists():
         logger.error(
             "Weights not found at '%s'. "
@@ -266,8 +309,8 @@ def stage_evaluate(args: argparse.Namespace) -> None:
 
     logger.info("Using weights: %s", weights)
 
-    from src.inference.predictor import YOLOrthoPredictor
-    predictor = YOLOrthoPredictor(
+    from src.inference.predictor import ARCHONPredictor
+    predictor = ARCHONPredictor(
         weights_path=weights,
         device=args.device,
         conf_threshold=args.conf,
@@ -297,7 +340,7 @@ def stage_predict(args: argparse.Namespace) -> None:
 
     weights = args.weights
     if weights is None:
-        weights = str(PROJECT_ROOT / "weights" / "yolortho_best.pt")
+        weights = str(PROJECT_ROOT / "weights" / "archon_best.pt")
         logger.warning("No --weights specified. Using default: '%s'", weights)
 
     if not Path(weights).exists():
@@ -311,8 +354,8 @@ def stage_predict(args: argparse.Namespace) -> None:
     logger.info("Weights: %s", weights)
     logger.info("Output:  %s", args.output)
 
-    from src.inference.predictor import YOLOrthoPredictor
-    predictor = YOLOrthoPredictor(
+    from src.inference.predictor import ARCHONPredictor
+    predictor = ARCHONPredictor(
         weights_path=weights,
         device=args.device,
         conf_threshold=args.conf,
@@ -340,7 +383,7 @@ def stage_predict(args: argparse.Namespace) -> None:
 # ─── Full Pipeline ────────────────────────────────────────────────────────────
 
 def run_full_pipeline(args: argparse.Namespace) -> None:
-    """Execute the complete YOLOrtho pipeline end-to-end.
+    """Execute the complete ARCHON pipeline end-to-end.
 
     Requires --dentex-root pointing to the DENTEX dataset folder.
 
@@ -352,7 +395,7 @@ def run_full_pipeline(args: argparse.Namespace) -> None:
       5. Evaluate on validation set
     """
     logger.info("=" * 70)
-    logger.info("  YOLOrtho FULL PIPELINE")
+    logger.info("  ARCHON FULL PIPELINE")
     logger.info("  Paper: https://arxiv.org/abs/2308.05967")
     logger.info("  Dataset: DENTEX (on disk at --dentex-root)")
     logger.info("=" * 70)
@@ -368,8 +411,8 @@ def run_full_pipeline(args: argparse.Namespace) -> None:
 
     # Phase 1 only: train detector on Parts 1+2 (needed to produce pseudo labels).
     # Phase 2 is intentionally skipped here so pseudo labels can be generated first.
-    from src.training.trainer import YOLOrthoTrainer
-    trainer = YOLOrthoTrainer(
+    from src.training.trainer import ARCHONTrainer
+    trainer = ARCHONTrainer(
         config_path=args.config,
         resume=args.resume,
         device=args.device,
@@ -385,7 +428,7 @@ def run_full_pipeline(args: argparse.Namespace) -> None:
 
     logger.info("=" * 70)
     logger.info("  Full pipeline complete.")
-    logger.info("  Best weights: weights/yolortho_best.pt")
+    logger.info("  Best weights: weights/archon_best.pt")
     logger.info("  Predictions:  outputs/predictions/")
     logger.info("=" * 70)
 
@@ -436,16 +479,17 @@ def main() -> None:
     args = parse_args()
     _ensure_output_dirs()
 
-    logger.info("YOLOrtho — Mode: %s | Device: %s", args.mode, args.device)
+    logger.info("ARCHON — Mode: %s | Device: %s", args.mode, args.device)
 
     dispatch = {
-        "preprocess":   stage_preprocess,
-        "pseudo_label": stage_pseudo_label,
-        "train":        stage_train,
-        "train_attr":   stage_train_attr,
-        "evaluate":     stage_evaluate,
-        "predict":      stage_predict,
-        "full":         run_full_pipeline,
+        "preprocess":    stage_preprocess,
+        "pseudo_label":  stage_pseudo_label,
+        "train":         stage_train,
+        "train_attr":    stage_train_attr,
+        "train_hybrid":  stage_train_hybrid,
+        "evaluate":      stage_evaluate,
+        "predict":       stage_predict,
+        "full":          run_full_pipeline,
     }
 
     stage_fn = dispatch.get(args.mode)

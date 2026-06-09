@@ -2,7 +2,7 @@
 verify_local_image.py
 ======================
 Run inference on a local panoramic dental X-ray image using the trained
-YOLOrtho model (phase2/best.pt or yolortho_best.pt) and display results.
+ARCHON model (phase2/best.pt or archon_best.pt) and display results.
 
 Usage:
     python verify_local_image.py --image path/to/xray.jpg
@@ -16,7 +16,7 @@ Save outputs:
     Use --no-save to skip saving entirely.
 
 Default weight search order:
-  1. weights/yolortho_best.pt        (final trained weights)
+  1. weights/archon_best.pt        (final trained weights)
   2. outputs/runs/phase2/weights/best.pt
   3. outputs/runs/phase1/weights/best.pt
 """
@@ -41,7 +41,7 @@ logger = logging.getLogger("verify_local_image")
 
 # ── Weight search ─────────────────────────────────────────────────────────────
 CANDIDATE_WEIGHTS = [
-    WILP_DIR / "weights" / "yolortho_best.pt",
+    WILP_DIR / "weights" / "archon_best.pt",
     WILP_DIR / "outputs" / "runs" / "phase2" / "weights" / "best.pt",
     WILP_DIR / "outputs" / "runs" / "phase1" / "weights" / "best.pt",
 ]
@@ -69,7 +69,7 @@ def find_weights(override: str = None) -> Path:
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
-        description="Verify YOLOrtho detection on a local panoramic X-ray image."
+        description="Verify ARCHON detection on a local panoramic X-ray image."
     )
     parser.add_argument(
         "--image", required=True,
@@ -87,7 +87,7 @@ def main():
     parser.add_argument(
         "--conf", type=float, default=0.10,
         help="Detection confidence threshold (default: 0.10). "
-             "YOLOrtho has 32 FDI classes so per-class confidence is naturally "
+             "ARCHON has 32 FDI classes so per-class confidence is naturally "
              "lower than binary detectors — use 0.05-0.15 to see all teeth. "
              "Raise toward 0.25 to reduce false positives."
     )
@@ -149,9 +149,9 @@ def main():
         logger.info("Save dir      : %s", effective_save_dir)
 
     # ── Run inference ─────────────────────────────────────────────────────────
-    from src.inference.predictor import YOLOrthoPredictor
+    from src.inference.predictor import ARCHONPredictor
 
-    predictor = YOLOrthoPredictor(
+    predictor = ARCHONPredictor(
         weights_path=str(weights_path),
         device=args.device,
         conf_threshold=args.conf,
@@ -229,7 +229,7 @@ def main():
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             plt.figure(figsize=(16, 8))
             plt.imshow(img_rgb)
-            plt.title(f"YOLOrtho — {img_name}")
+            plt.title(f"ARCHON — {img_name}")
             plt.axis("off")
             plt.tight_layout()
             plt.show()

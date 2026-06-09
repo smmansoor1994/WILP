@@ -1,7 +1,7 @@
 """
 src/models/heads.py
 ===================
-Disease Attribute Prediction Heads for YOLOrtho.
+ARCHON / ARCHON — Disease Attribute Prediction Heads.
 
 Paper Section 2.2:
   "We construct four binary classification heads:

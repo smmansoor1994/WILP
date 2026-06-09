@@ -1,7 +1,7 @@
 """
 src/training/loss.py
 ====================
-Hierarchical Loss for YOLOrtho.
+Hierarchical Loss for ARCHON / ARCHON.
 
 Paper Section 2.2 — Loss:
   Total loss = wb * Loss_bbox + wc * Loss_class + wd * Loss_DFL
@@ -19,7 +19,7 @@ Paper Section 2.2 — Loss:
     data_type = 2 (disease)       → compute bbox + class + attribute loss
 
 This file provides:
-  - YOLOrthoLoss: wraps the ultralytics v8 detection loss + attribute BCE
+  - ARCHONLoss: wraps the ultralytics v8 detection loss + attribute BCE
   - HierarchicalClassLoss: computes class loss with quadrant grouping for type-0 data
 """
 
@@ -190,8 +190,8 @@ class HierarchicalClassLoss(nn.Module):
         return self.loss_weight * total_loss
 
 
-class YOLOrthoLoss(nn.Module):
-    """Combined detection + attribute loss for YOLOrtho.
+class ARCHONLoss(nn.Module):
+    """Combined detection + attribute loss for ARCHON.
 
     Combines:
     - Standard YOLOv8 detection loss (bbox + class + DFL)

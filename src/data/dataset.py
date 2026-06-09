@@ -1,7 +1,7 @@
 """
 src/data/dataset.py
 ===================
-PyTorch Dataset for YOLOrtho with extended label format.
+ARCHON / ARCHON PyTorch Dataset with extended label format.
 
 Label file format (10 columns per detection):
   class_id  cx  cy  w  h  is_impacted  has_caries  has_deepcaries  has_lesion  data_type
@@ -13,7 +13,7 @@ Label file format (10 columns per detection):
   data_type: int {0,1,2} annotation completeness flag
 
 Usage:
-    dataset = YOLOrthoDataset(
+    dataset = ARCHONDataset(
         images_dir="data/processed/images/train",
         labels_dir="data/processed/labels/train",
         img_size=(640, 1280),
@@ -31,7 +31,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from src.data.augmentation import YOLOrthoAugmentor
+from src.data.augmentation import ARCHONAugmentor
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ def _letterbox(
     return padded, scale, pad_top, pad_left
 
 
-class YOLOrthoDataset(Dataset):
+class ARCHONDataset(Dataset):
     """Dataset loading panoramic X-ray images + extended YOLO labels.
 
     Args:
@@ -98,7 +98,7 @@ class YOLOrthoDataset(Dataset):
         labels_dir: Directory containing .txt label files.
         img_size:   Output image size as (height, width).
         augment:    Whether to apply augmentation.
-        augmentor:  Optional custom YOLOrthoAugmentor instance.
+        augmentor:  Optional custom ARCHONAugmentor instance.
     """
 
     def __init__(
@@ -107,13 +107,13 @@ class YOLOrthoDataset(Dataset):
         labels_dir: Path,
         img_size: Tuple[int, int] = (640, 1280),
         augment: bool = False,
-        augmentor: Optional[YOLOrthoAugmentor] = None,
+        augmentor: Optional[ARCHONAugmentor] = None,
     ):
         self.images_dir = Path(images_dir)
         self.labels_dir = Path(labels_dir)
         self.img_size = img_size   # (H, W)
         self.augment = augment
-        self.augmentor = augmentor or YOLOrthoAugmentor()
+        self.augmentor = augmentor or ARCHONAugmentor()
 
         # Collect all image paths
         self.image_paths = sorted([
@@ -125,7 +125,7 @@ class YOLOrthoDataset(Dataset):
             logger.warning("No images found in '%s'.", images_dir)
 
         logger.info(
-            "YOLOrthoDataset: %d images in '%s'",
+            "ARCHONDataset: %d images in '%s'",
             len(self.image_paths),
             images_dir,
         )

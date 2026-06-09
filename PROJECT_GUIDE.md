@@ -1,8 +1,18 @@
-# YOLOrtho — Project Guide
+# ARCHON — Project Guide
 
-> Quick reference for understanding, setting up, and running this implementation.
-> Paper: **YOLOrtho: A Unified Framework for Teeth Enumeration and Dental Disease Detection**
+> **ARCHON: Arch-Contextualized Hierarchical Orthodontic Network for Severity-Aware Dental Radiograph Analysis**
+>
+> Built on: **YOLOrtho: A Unified Framework for Teeth Enumeration and Dental Disease Detection**
 > arXiv: https://arxiv.org/abs/2308.05967
+>
+> Extended with Swin Transformer + Cross-Attention hybrid improvements.
+
+| Document | Purpose |
+|---|---|
+| `PROJECT_GUIDE.md` | Code walkthrough, JSON schemas, label format (this file) |
+| `WORKFLOW.md` | End-to-end call graph for every mode |
+| `IMPROVEMENTS.md` | What changed from baseline and why |
+| `README.md` | Architecture overview and quick start |
 
 ---
 
@@ -25,7 +35,7 @@
 ## 1. Project Structure
 
 ```
-YOLOrtho/
+ARCHON/
 │
 ├── main.py                          ← SINGLE ENTRY POINT — run everything from here
 ├── requirements.txt                 ← All Python dependencies
@@ -64,17 +74,20 @@ YOLOrtho/
 │   │   ├── __init__.py
 │   │   ├── coord_conv.py            ← CoordConv: adds (x,y) coordinate channels
 │   │   ├── heads.py                 ← 4 binary disease attribute prediction heads
-│   │   └── yolortho.py              ← Full YOLOrtho model wrapper (YOLOv8x + mods)
+    │   ├── yolortho.py              ← `ARCHON` base model + `ARCHONModel` (hybrid) wrappers
+    │   ├── swin_transformer.py      ← GlobalContextEncoder (Swin Transformer) [NEW]
+    │   ├── cross_attention.py       ← MultiScaleFusion (Cross-Attention)      [NEW]
+    │   └── hybrid_head.py           ← HybridMultiTaskHead (Severity+Quadrant)  [NEW]
 │   │
 │   ├── training/
 │   │   ├── __init__.py
-│   │   ├── trainer.py               ← Two-phase training orchestrator
+│   │   ├── trainer.py               ← ARCHONTrainer + ARCHONHybridTrainer
 │   │   └── loss.py                  ← Hierarchical loss (bbox + class + attribute BCE)
 │   │
 │   ├── inference/
 │   │   ├── __init__.py
-│   │   ├── predictor.py             ← Full inference pipeline (load → predict → save)
-│   │   └── postprocess.py           ← Linear sum assignment for unique FDI assignment
+│   │   ├── predictor.py             ← ARCHONPredictor + ARCHONHybridPredictor  [+Hybrid]
+│   │   └── postprocess.py           ← Linear sum assignment + quadrant-consistency penalty  [+Penalty]
 │   │
 │   └── utils/
 │       ├── __init__.py
@@ -82,12 +95,14 @@ YOLOrtho/
 │       └── visualize.py             ← Draw bounding boxes + dental chart overlay
 │
 ├── weights/                         ← Saved model checkpoints (.pt files)
-│   └── .gitkeep
+│   ├── attr_best.pt                 ← Phase 2b binary attribute heads
+│   ├── archon_best.pt             ← Phase 2 detection model
+│   └── hybrid_best.pt               ← Phase 3 Swin+Cross-Attn+Severity heads  [NEW]
 │
 └── outputs/
     ├── runs/                        ← Ultralytics training logs + TensorBoard events
     ├── predictions/                 ← Inference output: *_vis.jpg + *_result.json
-    └── yolortho.log                 ← Main pipeline log file
+    └── archon.log                 ← Main pipeline log file
 ```
 
 ---
@@ -123,21 +138,27 @@ YOLOrtho/
 |---|---|---|
 | `coord_conv.py` | `CoordConv`, `replace_backbone_conv_with_coordconv()` | Appends normalized (x,y) maps to feature maps before convolution |
 | `heads.py` | `MultiAttributeHead`, `AttributeLoss` | 4 binary disease heads, one per FPN scale × disease type |
-| `yolortho.py` | `YOLOrtho`, `build_yolortho()` | Loads YOLOv8x, injects CoordConv, attaches attribute heads via hooks |
+| `yolortho.py` | `ARCHON`, `build_archon_base()` | Loads YOLOv8x, injects CoordConv, attaches attribute heads via hooks |
+| `yolortho.py` | `ARCHONModel`, `build_archon_model()` | Wraps baseline with GlobalContextEncoder + MultiScaleFusion + HybridMultiTaskHead **[NEW]** |
+| `swin_transformer.py` | `GlobalContextEncoder`, `SwinTransformerBlock`, `WindowAttention` | 2-block Swin Transformer on P5 feature — captures full dental arch context **[NEW]** |
+| `cross_attention.py` | `CrossAttentionFusion`, `MultiScaleFusion` | Cross-attention Q=CNN, K/V=Swin; applied at all 3 FPN scales **[NEW]** |
+| `hybrid_head.py` | `HybridMultiTaskHead`, `SeverityHead`, `QuadrantAwareFDIHead`, `SeverityLoss`, `QuadrantAuxLoss` | 3-class severity per disease + 4-class quadrant auxiliary **[NEW]** |
 
 ### Training (`src/training/`)
 
 | File | Key Class | What It Does |
 |---|---|---|
-| `trainer.py` | `YOLOrthoTrainer` | Runs Phase 1 (detection), pseudo-labeling, Phase 2 (full), attribute fine-tune |
-| `loss.py` | `YOLOrthoLoss` | Combines detection loss + hierarchical class loss + attribute BCE; masks by `data_type` |
+| `trainer.py` | `ARCHONTrainer` | Runs Phase 1 (detection), pseudo-labeling, Phase 2 (full), attribute fine-tune |
+| `trainer.py` | `ARCHONHybridTrainer` | Phase 3: trains GlobalContextEncoder + MultiScaleFusion + HybridMultiTaskHead **[NEW]** |
+| `loss.py` | `ARCHONLoss` | Combines detection loss + hierarchical class loss + attribute BCE; masks by `data_type` |
 
 ### Inference (`src/inference/`)
 
 | File | Key Class | What It Does |
 |---|---|---|
-| `predictor.py` | `YOLOrthoPredictor` | Loads model, runs YOLO inference, applies attribute heads, saves results |
-| `postprocess.py` | `apply_linear_sum_assignment()` | Ensures each FDI number appears at most once using Hungarian algorithm |
+| `predictor.py` | `ARCHONPredictor` | Loads model, runs YOLO inference, applies attribute heads, saves results |
+| `predictor.py` | `ARCHONHybridPredictor` | Adds Swin+CrossAttn+SeverityHead inference; produces severity-annotated detections **[NEW]** |
+| `postprocess.py` | `apply_linear_sum_assignment()` | Ensures each FDI number appears at most once using Hungarian algorithm; accepts optional `quadrant_probs` penalty **[+Penalty]** |
 
 ### Utilities (`src/utils/`)
 
@@ -258,9 +279,9 @@ DISEASE_CAT3_TO_ATTR_IDX = {0: 0, 1: 1, 2: 3, 3: 2}   # cat3 id → attrs list i
 | Paper Contribution | Section | File | Key Symbol |
 |---|---|---|---|
 | Coordinate Convolution | §2.2 | `src/models/coord_conv.py` | `CoordConv`, `replace_backbone_conv_with_coordconv()` |
-| Modified FPN (strides 4,8,16) | §2.1 | `src/models/yolortho.py` | `build_yolortho()`, `config/model_config.yaml` → `fpn_strides` |
+| Modified FPN (strides 4,8,16) | §2.1 | `src/models/yolortho.py` | `build_archon_base()`, `config/model_config.yaml` → `fpn_strides` |
 | Disease attribute heads | §2.2 | `src/models/heads.py` | `MultiAttributeHead`, `AttributeHead` |
-| Hierarchical loss | §2.2 | `src/training/loss.py` | `YOLOrthoLoss`, `data_type` column masking |
+| Hierarchical loss | §2.2 | `src/training/loss.py` | `ARCHONLoss`, `data_type` column masking |
 | Quadrant-aware flip augmentation | §2.1 | `src/data/augmentation.py` | `_augment_fliplr()`, `FLIP_CLASS_TABLE` |
 | Two-phase training | §2.1 | `src/training/trainer.py` | `_train_phase1()`, `_train_phase2()`, `_train_attribute_heads()` |
 | Pseudo-labeling healthy teeth | §2.1 | `src/data/pseudo_label.py` | `generate_pseudo_labels()` |
@@ -341,7 +362,13 @@ pip install -r requirements.txt
 python main.py --mode full --device cuda --dentex-root "D:/WILP/sem-4/Dataset/DENTEX/DENTEXsample"
 ```
 
-This runs all stages automatically: preprocess → train → pseudo_label → train → evaluate.
+This runs all baseline stages automatically: preprocess → train → pseudo_label → train → evaluate.
+
+Then run Phase 3 separately:
+
+```bash
+python main.py --mode train_hybrid --device cuda
+```
 
 ---
 
@@ -362,27 +389,35 @@ python main.py --mode preprocess --dentex-root "D:/WILP/sem-4/Dataset/DENTEX/DEN
 
 # Stage 2: Phase 1 training — detection only (no attribute heads yet)
 python main.py --mode train --device cuda
-# → saves weights/yolortho_phase1.pt
+# → saves weights/archon_phase1.pt
 # → training logs at outputs/runs/
 
 # Stage 3: Generate pseudo labels for healthy teeth
-python main.py --mode pseudo_label --weights weights/yolortho_phase1.pt
+python main.py --mode pseudo_label --weights weights/archon_phase1.pt
 # Part 3 images: detections not overlapping existing disease boxes → healthy pseudo labels
 # Unlabelled images: all detected teeth → healthy pseudo labels
 # → creates data/pseudo/ with merged labels
 
 # Stage 4: Phase 2 training — full model with attribute heads
 python main.py --mode train --device cuda --phase 2
-# → saves weights/yolortho_best.pt
+# → saves weights/archon_best.pt
+# → saves weights/attr_best.pt (Phase 2b attribute heads)
 
-# Stage 5: Evaluate on official validation set (validation_triple.json)
-python main.py --mode evaluate --weights weights/yolortho_best.pt
+# Stage 5 [NEW]: Phase 3 — Hybrid components (Swin + Cross-Attention + Severity)
+python main.py --mode train_hybrid --device cuda
+# Requires: outputs/runs/phase2/weights/best.pt
+# Freezes backbone + attr_heads; trains GlobalContextEncoder + MultiScaleFusion + HybridMultiTaskHead
+# → saves weights/hybrid_best.pt (best validation loss across 50 epochs)
+
+# Stage 6: Evaluate on official validation set (validation_triple.json)
+python main.py --mode evaluate --weights weights/archon_best.pt
 # → prints AP-Quadrant, AP-Enumeration, AP-Diagnosis
 
-# Stage 6: Run inference on a new panoramic X-ray
-python main.py --mode predict --input path/to/xray.jpg --weights weights/yolortho_best.pt
+# Stage 7: Run inference on a new panoramic X-ray
+#          auto-loads hybrid_best.pt for severity output when present
+python main.py --mode predict --input path/to/xray.jpg --weights weights/archon_best.pt
 # → saves outputs/predictions/xray_vis.jpg (annotated image)
-# → saves outputs/predictions/xray_result.json (structured detection data)
+# → saves outputs/predictions/xray_result.json (structured detection data with severity_details)
 ```
 
 ---
@@ -391,10 +426,10 @@ python main.py --mode predict --input path/to/xray.jpg --weights weights/yolorth
 
 | Flag | Values | Description |
 |---|---|---|
-| `--mode` | `full`, `preprocess`, `train`, `pseudo_label`, `evaluate`, `predict` | Pipeline stage to run |
+| `--mode` | `full`, `preprocess`, `train`, `pseudo_label`, `train_attr`, `train_hybrid`, `evaluate`, `predict` | Pipeline stage to run |
 | `--dentex-root` | folder path | Root of DENTEX dataset on disk (**required** for preprocess / full) |
 | `--device` | `cuda`, `cpu`, `0`, `0,1` | Training device (default: auto-detect) |
-| `--weights` | path to `.pt` file | Model checkpoint for evaluate/predict |
+| `--weights` | path to `.pt` file | Model checkpoint for evaluate/predict/train_hybrid |
 | `--input` | file or directory path | Input for predict mode |
 | `--resume` | flag (no value) | Resume interrupted training from last checkpoint |
 | `--phase` | `1`, `2` | Training phase (default: 1) |
@@ -482,13 +517,13 @@ When an image is horizontally flipped, Q1↔Q2 and Q3↔Q4 swap.
 ### Phase 1 — Detection Training
 
 - **Data used**: Parts 1 + 2 (quadrant + enumeration labels only)
-- **Model**: YOLOv8x + CoordConv + modified FPN
+- **Model**: YOLOv8x + modified FPN (CoordConv NOT injected during ultralytics training)
 - **Losses computed**:
-  - `data_type=0`: bbox regression + quadrant class loss (4 classes via grouped prediction)
+  - `data_type=0`: bbox regression + quadrant class loss (4 classes)
   - `data_type=1`: bbox regression + FDI class loss (32 classes)
 - **Attribute heads**: NOT trained yet
-- **Goal**: Learn to localize teeth and enumerate their FDI numbers
-- **Output**: `weights/yolortho_phase1.pt`
+- **Goal**: Learn to localize teeth and enumerate their FDI numbers; generate quality pseudo labels
+- **Output**: `weights/archon_phase1.pt`
 
 ### Pseudo-Labeling (Between Phases)
 
@@ -502,31 +537,54 @@ When an image is horizontally flipped, Q1↔Q2 and Q3↔Q4 swap.
 - **Data used**: Parts 1 + 2 + 3 + pseudo labels
 - **Model**: Phase 1 checkpoint + newly initialized attribute heads
 - **Losses computed**: All of Phase 1 + attribute BCE for `data_type=2` samples
-- **Attribute head fine-tuning**: Backbone frozen, attribute heads trained separately
+- **Attribute head fine-tuning (Phase 2b)**: Backbone frozen, attribute heads trained with per-tooth spatial sampling
 - **Goal**: Learn to classify diseases per detected tooth
-- **Output**: `weights/yolortho_best.pt`
+- **Output**: `weights/archon_best.pt` + `weights/attr_best.pt`
+
+### Phase 3 — Hybrid Components Training (NEW)
+
+- **Mode**: `python main.py --mode train_hybrid`
+- **Requires**: `outputs/runs/phase2/weights/best.pt`
+- **Frozen**: YOLOv8x backbone + binary attribute heads (backbone in `.eval()` for stable BN)
+- **Trainable**: `GlobalContextEncoder` + `MultiScaleFusion` + `HybridMultiTaskHead`
+- **Loss**: `AttributeBCELoss(w=4.0) + SeverityLoss(w=4.0) + QuadrantAuxLoss(w=1.0)`
+- **Optimizer**: `AdamW(lr=5e-4)` with `CosineAnnealingLR` → `1e-6`
+- **Augmentation**: CLAHE active (p=0.5) for improved early lesion detection
+- **Epochs**: `phase3_epochs` (default 50)
+- **Goal**: Add severity grading + quadrant consistency to the validated baseline model
+- **Output**: `weights/hybrid_best.pt`
+
+**What Phase 3 adds clinically:**
+- Binary `has_caries` becomes `caries_severity: Healthy/Mild/Severe`
+- FDI assignment benefits from quadrant-consistency penalty (fewer symmetric tooth swaps)
+- CLAHE training improves detection of early caries in high-density enamel regions
 
 ---
 
 ## 8. Key Hyperparameters
 
-All in `config/train_config.yaml`:
+All in `config/train_config.yaml` and `config/model_config.yaml`:
 
 | Parameter | Value | Why |
 |---|---|---|
-| `epochs` | 200 | Paper trains for 200 epochs |
-| `batch_size` | 8 | Fits panoramic X-rays on 8–16GB GPU |
+| `phase1_epochs` | 100 | Enough epochs to learn stable tooth localization + FDI enumeration |
+| `phase2_epochs` | 50 | Fine-tune detection with all data including disease images |
+| `phase2b_epochs` | 50 | Attribute head training; more epochs → better disease recall |
+| `phase3_epochs` | 50 | Hybrid head training (Swin + Cross-Attn + Severity) **[NEW]** |
+| `batch_size` | 8 | Fits panoramic X-rays on 8–16GB GPU; Phase 3 uses half (4) |
 | `input_size` | 1280×640 | Panoramic X-rays are wide-format |
-| `loss_box` | 7.5 | Higher weight on bbox accuracy |
-| `loss_cls` | 0.5 | Standard |
-| `loss_dfl` | 1.5 | Distribution Focal Loss for bbox |
 | `loss_attr` | 8.0 | Higher weight: disease detection is the hard task |
-| `fliplr` | 0.5 | 50% horizontal flip (quadrant-aware) |
+| `fliplr` | 0.5 | 50% horizontal flip (quadrant-aware class remapping) |
 | `mosaic` | 0.0 | Disabled — panoramic X-rays must not be mixed |
 | `hsv_s` | 0.0 | X-rays are grayscale; saturation augmentation off |
-| `lr0` | 0.01 | Initial learning rate |
-| `lrf` | 0.01 | Final LR fraction |
+| `lr0` | 0.01 | Initial learning rate for detection phases |
 | `optimizer` | AdamW | Paper uses AdamW |
+| `clahe_prob` | 0.5 | CLAHE augmentation probability during Phase 3 **[NEW]** |
+| `swin_num_heads` | 8 | Attention heads in Swin blocks **[NEW]** |
+| `swin_window_size` | 4 | Window size for local attention on P5 feature **[NEW]** |
+| `fusion_num_heads` | 4 | Heads in cross-attention fusion **[NEW]** |
+| `num_severity_levels` | 3 | Healthy / Mild / Severe **[NEW]** |
+| `quadrant_penalty_alpha` | 0.5 | Strength of quadrant-consistency penalty in post-processing **[NEW]** |
 
 ---
 
@@ -536,15 +594,18 @@ All in `config/train_config.yaml`:
 
 ```
 weights/
-├── yolortho_phase1.pt          ← Phase 1 checkpoint (detection only)
-└── yolortho_best.pt            ← Best validation checkpoint (full model)
+├── archon_phase1.pt          ← Phase 1 checkpoint (detection only)
+├── archon_best.pt            ← Best Phase 2 detection checkpoint
+├── attr_best.pt                ← Phase 2b binary disease attribute heads
+└── hybrid_best.pt              ← Phase 3 Swin + Cross-Attn + Severity checkpoint  [NEW]
 
 outputs/runs/
-└── yolortho_phase1/
-    ├── weights/best.pt
-    ├── weights/last.pt
-    ├── results.csv             ← Per-epoch metrics
-    └── events.out.tfevents.*   ← TensorBoard log
+└── phase1/weights/
+└── phase2/weights/
+    ├── best.pt
+    ├── attr_best.pt
+    ├── hybrid_best.pt          ← also saved here as backup  [NEW]
+    └── results.csv             ← per-epoch metrics
 ```
 
 ### After Inference (`--mode predict`)
@@ -563,7 +624,13 @@ outputs/predictions/
           "is_impacted": false,
           "has_caries": true,
           "has_deepcaries": false,
-          "has_lesion": false
+          "has_lesion": false,
+          "severity_details": {         ← only when hybrid_best.pt loaded  [NEW]
+            "caries": "Mild",
+            "impacted": "Healthy",
+            "deepcaries": "Healthy",
+            "lesion": "Healthy"
+          }
         },
         ...
       ]
@@ -605,7 +672,7 @@ python main.py --mode train --device 0    # use GPU 0
 - Lower learning rate: edit `lr0: 0.001` in `train_config.yaml`
 
 ### Pseudo-label step produces no labels
-- Ensure Phase 1 training completed and `weights/yolortho_phase1.pt` exists
+- Ensure Phase 1 training completed and `weights/archon_phase1.pt` exists
 - Lower detection threshold: edit `conf_threshold: 0.2` in `model_config.yaml`
 
 ---

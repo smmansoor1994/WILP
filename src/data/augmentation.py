@@ -1,7 +1,12 @@
 """
 src/data/augmentation.py
 ========================
-Custom augmentation pipeline for YOLOrtho.
+ARCHON / ARCHON custom augmentation pipeline.
+
+Contains two augmentation types:
+  • Flip Mapping (baseline)  — quadrant-aware horizontal flip remapping
+  • CLAHE (ARCHON Improvement D) — local contrast enhancement for early
+    caries and periapical lesion visibility on non-uniform X-ray exposures
 
 Key contribution from Section 2.1 of the paper:
   "Flip Mapping" — when a panoramic image is horizontally flipped,
@@ -14,7 +19,7 @@ this remapping. This module wraps albumentations transforms with the correct
 post-flip class remapping.
 
 Usage:
-    aug = YOLOrthoAugmentor(config)
+    aug = ARCHONAugmentor(config)
     img_aug, labels_aug = aug(image, labels)
 
 Label format (per row):
@@ -33,19 +38,30 @@ from src.utils.fdi import FLIP_CLASS_TABLE
 logger = logging.getLogger(__name__)
 
 
-class YOLOrthoAugmentor:
-    """Augmentation pipeline for YOLOrtho.
+class ARCHONAugmentor:
+    """Augmentation pipeline for ARCHON.
 
     Applies standard augmentations (brightness, blur, rotation, scale)
     plus flip-with-quadrant-remapping (the paper's key augmentation).
 
+    Hybrid improvement — CLAHE (Contrast Limited Adaptive Histogram Equalization):
+      Dental X-rays often have non-uniform exposure (brighter around jawbone,
+      darker at edges). CLAHE performs local histogram equalization within small
+      tiles (clipLimit controls max amplification), enhancing subtle structural
+      details (early caries, thin root boundaries, early periapical changes)
+      that global brightness jitter cannot reveal. This addresses "Pathology
+      Sensitivity" limitation: the model now sees better-contrast training images.
+
     Args:
-        hsv_v:      Brightness jitter magnitude (0-1).
-        degrees:    Max rotation angle in degrees.
-        translate:  Max translation fraction.
-        scale:      Max scale jitter factor (1 ± scale).
-        blur_prob:  Probability of applying Gaussian blur.
-        fliplr:     Probability of horizontal flip.
+        hsv_v:         Brightness jitter magnitude (0-1).
+        degrees:       Max rotation angle in degrees.
+        translate:     Max translation fraction.
+        scale:         Max scale jitter factor (1 ± scale).
+        blur_prob:     Probability of applying Gaussian blur.
+        fliplr:        Probability of horizontal flip.
+        clahe_prob:    Probability of applying CLAHE preprocessing (default 0.5).
+        clahe_clip:    CLAHE clip limit (default 2.0 — conservative for X-rays).
+        clahe_tile:    CLAHE tile grid size (default 8×8).
     """
 
     def __init__(
@@ -56,6 +72,9 @@ class YOLOrthoAugmentor:
         scale: float = 0.5,
         blur_prob: float = 0.1,
         fliplr: float = 0.5,
+        clahe_prob: float = 0.5,
+        clahe_clip: float = 2.0,
+        clahe_tile: int = 8,
     ):
         self.hsv_v = hsv_v
         self.degrees = degrees
@@ -63,6 +82,12 @@ class YOLOrthoAugmentor:
         self.scale = scale
         self.blur_prob = blur_prob
         self.fliplr = fliplr
+        self.clahe_prob = clahe_prob
+        # Build CLAHE object once (thread-safe to reuse)
+        self._clahe = cv2.createCLAHE(
+            clipLimit=clahe_clip,
+            tileGridSize=(clahe_tile, clahe_tile),
+        )
 
     def __call__(
         self,
@@ -79,21 +104,56 @@ class YOLOrthoAugmentor:
         Returns:
             Augmented (image, labels) pair.
         """
-        # 1. Brightness / exposure augmentation (X-ray-safe: no color change)
+        # 1. CLAHE preprocessing — enhance local contrast (hybrid improvement)
+        #    Increases visibility of subtle structures (early caries, thin root lines)
+        #    before any destructive augmentation (blur, brightness jitter).
+        image = self._augment_clahe(image)
+
+        # 2. Brightness / exposure augmentation (X-ray-safe: no color change)
         image = self._augment_brightness(image)
 
-        # 2. Gaussian blur (simulate noise / motion blur)
+        # 3. Gaussian blur (simulate noise / motion blur)
         image = self._augment_blur(image)
 
-        # 3. Geometric: rotation + translation + scale
+        # 4. Geometric: rotation + translation + scale
         image, labels = self._augment_affine(image, labels)
 
-        # 4. Horizontal flip WITH quadrant remapping (key contribution)
+        # 5. Horizontal flip WITH quadrant remapping (key contribution)
         image, labels = self._augment_fliplr(image, labels)
 
         return image, labels
 
     # ─── Individual augmentation methods ──────────────────────────────────────
+
+    def _augment_clahe(self, image: np.ndarray) -> np.ndarray:
+        """Apply CLAHE (Contrast Limited Adaptive Histogram Equalization).
+
+        Dental X-rays have non-uniform exposure — bone is bright, soft tissue
+        is dark. CLAHE improves local contrast, making early caries (demineralisation
+        appears as subtle brightness change) and periapical lesions (dark halos at
+        root tips) more visible during training.
+
+        Applied stochastically (prob=clahe_prob) to prevent over-sharpening.
+        Always applied to grayscale channel(s); safely skips colour images.
+        """
+        if random.random() > self.clahe_prob:
+            return image
+
+        # X-rays stored as BGR (3-channel) but are effectively grayscale.
+        # Apply CLAHE on the luminance channel only to avoid color artifacts.
+        if image.ndim == 2:
+            return self._clahe.apply(image)
+
+        # Check if image is actually grayscale stored as BGR (all channels equal)
+        if image.shape[2] == 3:
+            # Convert to LAB, apply CLAHE on L channel, convert back
+            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+            l_ch, a_ch, b_ch = cv2.split(lab)
+            l_eq = self._clahe.apply(l_ch)
+            lab_eq = cv2.merge([l_eq, a_ch, b_ch])
+            return cv2.cvtColor(lab_eq, cv2.COLOR_LAB2BGR)
+
+        return image
 
     def _augment_brightness(self, image: np.ndarray) -> np.ndarray:
         """Random brightness/contrast adjustment for X-ray images.

@@ -1,7 +1,7 @@
 """
 src/data/pseudo_label.py
 =========================
-Generate pseudo labels for healthy teeth using a Phase 1 detector.
+ARCHON / ARCHON — Generate pseudo labels for healthy teeth using a Phase 1 detector.
 
 Background (Section 2.1 of the paper):
   Part 3 of the Dentex dataset only annotates DISEASED teeth.

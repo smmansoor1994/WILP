@@ -1,7 +1,10 @@
 """
 src/inference/postprocess.py
 =============================
-Post-processing strategy for YOLOrtho: Linear Sum Assignment for teeth enumeration.
+Post-processing for ARCHON / ARCHON: Linear Sum Assignment for teeth enumeration.
+
+ARCHON extension: optional quadrant-consistency penalty (Improvement E) can be
+passed as `quadrant_probs` to bias FDI assignment toward quadrant-consistent slots.
 
 Paper Section 2.3 — Post-Process Strategy:
   "Each FDI is associated with one tooth only. We notice that deep learning
@@ -11,7 +14,7 @@ Paper Section 2.3 — Post-Process Strategy:
   only, and the cost of objects is constructed by their probability of each class."
 
 Algorithm:
-  1. Run YOLOrtho → get N detections with class probabilities (32 FDI classes)
+  1. Run ARCHON → get N detections with class probabilities (32 FDI classes)
   2. Build a cost matrix: rows = FDI positions (0-31), cols = detections
      cost[i, j] = 1 - prob[j, i]  (lower cost = higher probability)
   3. Solve the assignment problem using scipy.optimize.linear_sum_assignment
@@ -92,11 +95,18 @@ def apply_linear_sum_assignment(
     boxes_xywhn: np.ndarray,    # (N, 4)  — normalized bounding boxes
     boxes_xyxy: np.ndarray,     # (N, 4)  — absolute bounding boxes
     confidences: np.ndarray,    # (N,)    — detection confidences
-    attr_probs: Optional[np.ndarray] = None,  # (N, 4) — attribute probabilities [0,1]
+    attr_probs: Optional[np.ndarray] = None,    # (N, 4) — attribute probs [0,1]
     conf_threshold: float = 0.25,
     attr_threshold: float = 0.3,
+    quadrant_probs: Optional[np.ndarray] = None,  # (N, 4) — quadrant softmax probs
 ) -> List[ToothDetection]:
     """Apply the linear sum assignment to enforce unique FDI assignment.
+
+    When quadrant_probs are provided (from the hybrid quadrant auxiliary head),
+    the cost matrix is augmented with a quadrant-consistency penalty: if the
+    model predicts a detection is in quadrant Q with high confidence, the cost
+    of assigning it to an FDI slot from a DIFFERENT quadrant is increased.
+    This directly addresses FDI numbering conflicts across jaw sides.
 
     Args:
         class_probs:    Raw class probability scores for each detection.
@@ -106,6 +116,9 @@ def apply_linear_sum_assignment(
         attr_probs:     Disease attribute probabilities [0-1] per detection.
         conf_threshold: Minimum confidence to include a detection.
         attr_threshold: Threshold for binary disease attribute decision.
+        quadrant_probs: (N, 4) — softmax probabilities over quadrants 0-3,
+                        from the hybrid quadrant head. When provided, adds a
+                        quadrant-consistency penalty (alpha=0.5) to cost matrix.
 
     Returns:
         List of ToothDetection results (at most 32, one per FDI position).
@@ -140,6 +153,22 @@ def apply_linear_sum_assignment(
     # cost[i, j] = -log(prob[j, i] + eps)
     eps = 1e-7
     cost_matrix = -np.log(valid_probs.T + eps)  # (32, M)
+
+    # ── Quadrant-consistency penalty (hybrid improvement) ─────────────────────
+    # When quadrant_probs are provided by the hybrid quadrant head:
+    # For each FDI slot i (belongs to quadrant q_i = i // 8) and each detection j,
+    # add a penalty proportional to the probability that detection j is NOT in q_i.
+    #   penalty[i, j] = alpha * (1 - quadrant_probs[j, q_i])
+    # This lowers the cost of same-quadrant assignments and raises cross-quadrant costs.
+    if quadrant_probs is not None:
+        valid_quad = quadrant_probs[valid_idx]  # (M, 4)  softmax over quadrants 0-3
+        ALPHA = 0.5  # penalty weight — keeps FDI class probs dominant
+        # slot_quadrants[i] = quadrant index for FDI slot i (0-3)
+        slot_quadrants = np.arange(NUM_CLASSES) // 8  # (32,)
+        # quad_match_prob[i, j] = valid_quad[j, slot_quadrants[i]]
+        quad_match_prob = valid_quad[:, slot_quadrants].T  # (32, M)
+        quad_penalty = ALPHA * (1.0 - quad_match_prob)     # (32, M)
+        cost_matrix = cost_matrix + quad_penalty
 
     # ── Solve the assignment ──────────────────────────────────────────────────
     # linear_sum_assignment minimizes total cost
@@ -228,15 +257,19 @@ def postprocess_yolo_output(
     conf_threshold: float = 0.25,
     attr_threshold: float = 0.3,
     img_shape: Optional[tuple] = None,
+    quadrant_probs: Optional[np.ndarray] = None,  # (N, 4) quadrant probs (hybrid)
 ) -> List[ToothDetection]:
-    """Convert ultralytics YOLO output to YOLOrtho tooth detections.
+    """Convert ultralytics YOLO output to ARCHON tooth detections.
 
     Args:
-        results:       ultralytics Results object from model.predict().
-        attr_probs:    Disease attribute probabilities from attribute heads.
+        results:        ultralytics Results object from model.predict().
+        attr_probs:     Disease attribute probabilities from attribute heads.
         conf_threshold: Minimum detection confidence.
         attr_threshold: Threshold for binary attribute prediction.
-        img_shape:     Original image (H, W) for absolute box conversion.
+        img_shape:      Original image (H, W) for absolute box conversion.
+        quadrant_probs: (N, 4) quadrant probabilities from hybrid head; when
+                        provided, adds quadrant-consistency penalty to linear
+                        sum assignment cost matrix.
 
     Returns:
         List of ToothDetection results.
@@ -293,6 +326,7 @@ def postprocess_yolo_output(
         attr_probs=attr_probs,
         conf_threshold=conf_threshold,
         attr_threshold=attr_threshold,
+        quadrant_probs=quadrant_probs,
     )
 
 

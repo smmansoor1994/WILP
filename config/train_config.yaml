@@ -16,6 +16,12 @@ training:
                            #   • 50 allows all 3 data-type branches to stabilise.
 
   phase2b_epochs: 50       # Phase 2b: attribute head fine-tuning (backbone frozen)
+
+  phase3_epochs: 50        # Phase 3 (Hybrid): Swin encoder + cross-attention + severity head
+                           #   • Backbone + attr heads frozen; only new components trained.
+                           #   • 50 epochs with CosineAnnealingLR (5e-4 → 1e-6) is enough
+                           #     because the heads are shallow and the backbone is stable.
+                           #   • Loss: AttributeBCE(w=4) + SeverityLoss(w=4) + QuadrantAux(w=1)
                            #   • Previously 30 — increased to 50.
                            #   • More epochs = better sensitivity (disease recall)
                            #     without harming specificity (backbone frozen,

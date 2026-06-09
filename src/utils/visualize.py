@@ -1,7 +1,7 @@
 """
 src/utils/visualize.py
 =======================
-Visualization utilities for YOLOrtho dental X-ray detections.
+Visualization utilities for ARCHON dental X-ray detections.
 
 Draws:
   - Bounding boxes colored by quadrant

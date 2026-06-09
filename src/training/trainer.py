@@ -1,7 +1,12 @@
 """
 src/training/trainer.py
 =======================
-YOLOrtho Training Pipeline.
+ARCHON Training Pipeline.
+
+Contains two trainers:
+  ARCHONTrainer      — Baseline two-phase training (paper arXiv:2308.05967)
+  ARCHONHybridTrainer — ARCHON Phase 3: trains GlobalContextEncoder +
+                          MultiScaleFusion + HybridMultiTaskHead on frozen backbone.
 
 Training strategy (from the paper, Section 2):
   Phase 1 — Pre-train on Part 1 + Part 2 data (no disease labels):
@@ -18,8 +23,8 @@ This trainer wraps ultralytics' YOLO.train() but adds:
   - Proper logging of all loss components
 
 Usage:
-    from src.training.trainer import YOLOrthoTrainer
-    trainer = YOLOrthoTrainer("config/train_config.yaml")
+    from src.training.trainer import ARCHONTrainer
+    trainer = ARCHONTrainer("config/train_config.yaml")
     trainer.train()
 """
 
@@ -34,8 +39,8 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
-class YOLOrthoTrainer:
-    """Two-phase YOLOrtho trainer.
+class ARCHONTrainer:
+    """Two-phase ARCHON trainer.
 
     Args:
         config_path: Path to train_config.yaml.
@@ -111,7 +116,7 @@ class YOLOrthoTrainer:
             candidates = [
                 self.save_dir / "phase2" / "weights" / "best.pt",
                 self.save_dir / "phase1" / "weights" / "best.pt",
-                self.project_root / "weights" / "yolortho_best.pt",
+                self.project_root / "weights" / "archon_best.pt",
             ]
             base_weights_path = next((p for p in candidates if p.exists()), None)
             if base_weights_path is None:
@@ -231,7 +236,7 @@ class YOLOrthoTrainer:
         self._promote_weights(phase=2)
 
         # Copy final weights to top-level weights/
-        final_dst = self.project_root / "weights" / "yolortho_best.pt"
+        final_dst = self.project_root / "weights" / "archon_best.pt"
         final_dst.parent.mkdir(exist_ok=True)
         if phase2_best.exists():
             shutil.copy2(phase2_best, final_dst)
@@ -249,9 +254,9 @@ class YOLOrthoTrainer:
         import torch
         from torch.optim import AdamW
         from torch.optim.lr_scheduler import CosineAnnealingLR
-        from src.models.yolortho import build_yolortho, ATTRIBUTE_NAMES
+        from src.models.archon import build_archon_base, ATTRIBUTE_NAMES
         from src.training.loss import AttributeBCELoss
-        from src.data.dataset import YOLOrthoDataset
+        from src.data.dataset import ARCHONDataset
 
         device = self.device
         # Phase 2b epochs: use dedicated key > fall back to epochs//5 > minimum 20
@@ -267,7 +272,7 @@ class YOLOrthoTrainer:
         )
 
         # Build model
-        model = build_yolortho(
+        model = build_archon_base(
             num_classes=32,
             base_weights=base_weights,
             use_coordconv=True,
@@ -309,7 +314,7 @@ class YOLOrthoTrainer:
         else:
             images_dir = data_root / "images" / "train"
 
-        dataset = YOLOrthoDataset(
+        dataset = ARCHONDataset(
             images_dir=images_dir,
             labels_dir=labels_ext_dir,
             img_size=(self.train_cfg.get("input_height", 640),
@@ -323,7 +328,7 @@ class YOLOrthoTrainer:
             batch_size=self.train_cfg.get("batch_size", 8),
             shuffle=True,
             num_workers=max_workers,
-            collate_fn=YOLOrthoDataset.collate_fn,
+            collate_fn=ARCHONDataset.collate_fn,
         )
 
         optimizer = AdamW(model.attr_heads.parameters(), lr=1e-3, weight_decay=1e-4)
@@ -652,3 +657,278 @@ def _compute_attr_pos_weight(dataset) -> List[float]:
     except Exception as exc:
         logger.warning("pos_weight computation failed (%s); using fallback %s", exc, FALLBACK)
         return FALLBACK
+
+
+# ─── Hybrid Trainer ───────────────────────────────────────────────────────────
+
+class ARCHONHybridTrainer(ARCHONTrainer):
+    """Extended trainer for ARCHONModel.
+
+    Adds Phase 3 — hybrid component training on top of the baseline two-phase
+    pipeline. Only the new components (Swin encoder, cross-attention fusion,
+    hybrid head) are trained; the YOLOv8 backbone + detection head remain frozen.
+
+    Phase 3 training strategy:
+      - Load Phase 2 detection best.pt as backbone.
+      - Inject CoordConv, attach Swin + CrossAttention + HybridHead.
+      - Freeze backbone + binary attribute heads.
+      - Train: Swin encoder + cross-attention fusion + HybridMultiTaskHead.
+      - Loss: AttributeBCELoss (binary, for compat) + SeverityLoss + QuadrantAuxLoss.
+
+    Usage:
+        trainer = ARCHONHybridTrainer("config/train_config.yaml")
+        trainer.train()          # runs phases 1 + 2 + 3
+        trainer.train_hybrid()   # phase 3 only (backbone already trained)
+    """
+
+    def train(self) -> None:
+        """Run full pipeline: phase 1 + 2 (baseline) + phase 3 (hybrid)."""
+        super().train()  # runs baseline Phase 1 + 2 + 2b
+        self.train_hybrid()
+
+    def train_hybrid(self, base_weights: Optional[str] = None) -> None:
+        """Phase 3: Train hybrid components (Swin + CrossAttn + HybridHead).
+
+        Args:
+            base_weights: Detection backbone weights. Defaults to
+                          outputs/runs/phase2/weights/best.pt.
+        """
+        if base_weights is None:
+            candidates = [
+                self.save_dir / "phase2" / "weights" / "best.pt",
+                self.project_root / "weights" / "archon_best.pt",
+            ]
+            base_weights_path = next((p for p in candidates if p.exists()), None)
+            if base_weights_path is None:
+                raise FileNotFoundError(
+                    "No Phase 2 backbone weights found for hybrid training. "
+                    "Run --mode train first."
+                )
+            base_weights = str(base_weights_path)
+
+        logger.info("=" * 60)
+        logger.info("PHASE 3: Hybrid component training")
+        logger.info("  Swin Transformer + Cross-Attention + Severity Head")
+        logger.info("  Backbone: %s", base_weights)
+        logger.info("=" * 60)
+        self._train_hybrid_heads(base_weights=base_weights)
+
+    def _train_hybrid_heads(self, base_weights: str) -> None:
+        """Train hybrid components with frozen YOLOv8 backbone."""
+        import os
+        import torch
+        from torch.optim import AdamW
+        from torch.optim.lr_scheduler import CosineAnnealingLR
+        from src.models.archon import build_archon_model
+        from src.training.loss import AttributeBCELoss
+        from src.models.hybrid_head import SeverityLoss, QuadrantAuxLoss
+        from src.data.dataset import ARCHONDataset
+
+        device = self.device
+        epochs = int(self.train_cfg.get(
+            "phase3_epochs",
+            self.train_cfg.get("phase2b_epochs", 50)
+        ))
+        logger.info("Hybrid training: %d epochs on %s", epochs, device)
+
+        # Build hybrid model
+        model = build_archon_model(
+            num_classes=32,
+            base_weights=base_weights,
+            use_coordconv=True,
+            device=device,
+            verbose=True,
+        )
+
+        # Freeze backbone + detection head + binary attribute heads
+        for param in model.base_model.parameters():
+            param.requires_grad = False
+        for param in model.attr_heads.parameters():
+            param.requires_grad = False
+
+        # Only train the three new hybrid components
+        hybrid_trainable = list(model.global_encoder.parameters()) + \
+                           list(model.fusion.parameters()) + \
+                           list(model.hybrid_head.parameters())
+        for p in hybrid_trainable:
+            p.requires_grad = True
+
+        n_hybrid = sum(p.numel() for p in hybrid_trainable)
+        logger.info("Hybrid trainable parameters: %s", f"{n_hybrid:,}")
+
+        # Dataset (same as attr head training — labels_ext for disease supervision)
+        pseudo_root = self.project_root / "data" / "pseudo"
+        processed_root = self.project_root / "data" / "processed"
+        data_root = pseudo_root if (pseudo_root / "images").exists() else processed_root
+        labels_ext_dir = data_root / "labels_ext" / "train"
+        if not labels_ext_dir.exists() or not any(labels_ext_dir.glob("*.txt")):
+            labels_ext_dir = processed_root / "labels_ext" / "train"
+            images_dir = processed_root / "images" / "train"
+        else:
+            images_dir = data_root / "images" / "train"
+
+        dataset = ARCHONDataset(
+            images_dir=images_dir,
+            labels_dir=labels_ext_dir,
+            img_size=(self.train_cfg.get("input_height", 640),
+                      self.train_cfg.get("input_width", 1280)),
+        )
+        max_workers = min(self.train_cfg.get("workers", 4), os.cpu_count() or 2, 4)
+        loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=max(1, self.train_cfg.get("batch_size", 8) // 2),  # half batch for memory
+            shuffle=True,
+            num_workers=max_workers,
+            collate_fn=ARCHONDataset.collate_fn,
+        )
+
+        optimizer = AdamW(hybrid_trainable, lr=5e-4, weight_decay=1e-4)
+        scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+
+        # Loss functions
+        _pw_cfg = self.train_cfg.get("attr_pos_weight", None)
+        pos_weight = [float(v) for v in _pw_cfg] if _pw_cfg and len(_pw_cfg) == 4 \
+                     else _compute_attr_pos_weight(dataset)
+        attr_loss_fn = AttributeBCELoss(num_attrs=4, loss_weight=4.0, pos_weight=pos_weight)
+        severity_loss_fn = SeverityLoss(num_attrs=4, num_severity_levels=3, loss_weight=4.0)
+        quadrant_loss_fn = QuadrantAuxLoss(loss_weight=1.0)
+        attr_loss_fn.to(device)
+        severity_loss_fn.to(device)
+
+        # Freeze backbone in eval mode (BN uses running stats, not batch stats)
+        model.base_model.model.eval()
+        model.global_encoder.train()
+        model.fusion.train()
+        model.hybrid_head.train()
+
+        best_loss = float("inf")
+        best_path = self.save_dir / "phase2" / "weights" / "hybrid_best.pt"
+        best_path.parent.mkdir(parents=True, exist_ok=True)
+        weights_hybrid_path = self.project_root / "weights" / "hybrid_best.pt"
+        weights_hybrid_path.parent.mkdir(exist_ok=True)
+        optimizer_stepped = False
+
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            n_batches = 0
+
+            for batch_imgs, batch_labels in loader:
+                batch_imgs = batch_imgs.to(device)
+                optimizer.zero_grad()
+
+                # Run frozen backbone to populate FPN hooks
+                model._fpn_features = []
+                with torch.no_grad():
+                    model.base_model.model(batch_imgs)
+
+                fpn_raw = [f.detach() for f in model._fpn_features[:3] if f is not None]
+                if len(fpn_raw) < 3:
+                    continue
+
+                # Swin global context (trainable)
+                p5 = fpn_raw[2]
+                global_ctx = model.global_encoder(p5)
+
+                # Cross-attention fusion (trainable)
+                fpn_fused = model.fusion(fpn_raw, global_ctx)
+
+                # Hybrid head outputs (trainable)
+                hybrid_out = model.hybrid_head(fpn_fused)
+                # Also run legacy binary attr heads (frozen, for compat)
+                with torch.no_grad():
+                    attr_outputs = model.attr_heads(fpn_fused)
+
+                # ── Per-tooth supervision ──────────────────────────────────────
+                all_attr_preds, all_sev_preds = [], []
+                all_quad_preds, all_quad_targets = [], []
+                all_targets, all_dtypes = [], []
+
+                for img_idx, lbl in enumerate(batch_labels):
+                    if lbl is None or len(lbl) == 0:
+                        continue
+                    lbl = lbl.to(device)
+                    cx = lbl[:, 1]
+                    cy = lbl[:, 2]
+                    cls_ids = lbl[:, 0].long()
+                    attrs = lbl[:, 5:9].float()
+                    data_types = lbl[:, 9].long()
+
+                    # Sample severity logits at each tooth center across all scales
+                    sev_scale_samples = []
+                    attr_scale_samples = []
+                    quad_scale_samples = []
+
+                    for s_idx, (sev_feat, quad_feat, attr_feat) in enumerate(zip(
+                        hybrid_out["severity"],
+                        hybrid_out["quadrant"],
+                        attr_outputs,
+                    )):
+                        _, C_sev, H_f, W_f = sev_feat.shape
+                        xf = (cx * W_f).long().clamp(0, W_f - 1)
+                        yf = (cy * H_f).long().clamp(0, H_f - 1)
+
+                        # Severity: (C_sev=12, N_teeth) → (N_teeth, 12)
+                        sev_scale_samples.append(sev_feat[img_idx, :, yf, xf].T)
+                        # Quadrant: (4, N_teeth) → (N_teeth, 4)
+                        quad_scale_samples.append(quad_feat[img_idx, :, yf, xf].T)
+                        # Attr: (4, N_teeth) → (N_teeth, 4)
+                        attr_scale_samples.append(attr_feat[img_idx, :, yf, xf].T)
+
+                    if not sev_scale_samples:
+                        continue
+
+                    tooth_sev = torch.stack(sev_scale_samples, dim=0).mean(dim=0)    # (N, 12)
+                    tooth_quad = torch.stack(quad_scale_samples, dim=0).mean(dim=0)  # (N, 4)
+                    tooth_attr = torch.stack(attr_scale_samples, dim=0).mean(dim=0)  # (N, 4)
+
+                    all_sev_preds.append(tooth_sev)
+                    all_quad_preds.append(tooth_quad)
+                    all_attr_preds.append(tooth_attr)
+                    all_quad_targets.append(cls_ids)
+                    all_targets.append(attrs)
+                    all_dtypes.append(data_types)
+
+                if not all_sev_preds:
+                    continue
+
+                pred_sev = torch.cat(all_sev_preds, dim=0)
+                pred_quad = torch.cat(all_quad_preds, dim=0)
+                pred_attr = torch.cat(all_attr_preds, dim=0)
+                tgt_attr = torch.cat(all_targets, dim=0).to(device)
+                quad_tgt = torch.cat(all_quad_targets, dim=0).to(device)
+                dt = torch.cat(all_dtypes, dim=0).to(device)
+
+                loss_attr = attr_loss_fn(pred_attr, tgt_attr, dt)
+                loss_sev = severity_loss_fn(pred_sev, tgt_attr, dt)
+                loss_quad = quadrant_loss_fn(pred_quad, quad_tgt)
+                loss = loss_attr + loss_sev + loss_quad
+
+                loss.backward()
+                optimizer.step()
+                optimizer_stepped = True
+
+                epoch_loss += loss.item()
+                n_batches += 1
+
+            if optimizer_stepped:
+                scheduler.step()
+
+            avg_loss = epoch_loss / max(n_batches, 1)
+            logger.info(
+                "Hybrid epoch [%d/%d]  loss=%.4f", epoch + 1, epochs, avg_loss
+            )
+
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                ckpt = {
+                    "epoch": epoch,
+                    "global_encoder_state": model.global_encoder.state_dict(),
+                    "fusion_state": model.fusion.state_dict(),
+                    "hybrid_head_state": model.hybrid_head.state_dict(),
+                    "loss": best_loss,
+                }
+                torch.save(ckpt, best_path)
+                torch.save(ckpt, weights_hybrid_path)
+
+        logger.info("Hybrid training complete. Best loss: %.4f", best_loss)
+        logger.info("hybrid_best.pt saved to '%s'.", weights_hybrid_path)

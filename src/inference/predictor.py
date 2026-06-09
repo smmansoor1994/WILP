@@ -1,7 +1,12 @@
 """
 src/inference/predictor.py
 ===========================
-YOLOrtho inference pipeline.
+ARCHON inference pipeline.
+
+Contains two predictors:
+  ARCHONPredictor      — Baseline inference (detection + binary disease heads)
+  ARCHONHybridPredictor — ARCHON inference (adds Swin context + severity grading
+                             + quadrant-consistency post-processing)
 
 Runs the full prediction pipeline:
   1. Load image (file, directory, or URL)
@@ -12,7 +17,7 @@ Runs the full prediction pipeline:
   6. Optionally save visualized output
 
 Usage:
-    predictor = YOLOrthoPredictor(weights_path="weights/yolortho_best.pt")
+    predictor = ARCHONPredictor(weights_path="weights/archon_best.pt")
 
     # Single image
     results = predictor.predict("path/to/xray.jpg")
@@ -46,11 +51,11 @@ logger = logging.getLogger(__name__)
 IMG_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
 
 
-class YOLOrthoPredictor:
-    """Inference class for YOLOrtho model.
+class ARCHONPredictor:
+    """Inference class for ARCHON model.
 
     Args:
-        weights_path:    Path to YOLOrtho .pt model weights.
+        weights_path:    Path to ARCHON .pt model weights.
         device:          Torch device ('cuda' or 'cpu').
         conf_threshold:  Minimum detection confidence.
         iou_threshold:   NMS IoU threshold.
@@ -93,7 +98,7 @@ class YOLOrthoPredictor:
         self._fpn_features: List[torch.Tensor] = []
 
         logger.info(
-            "YOLOrthoPredictor initialized. Weights: '%s'", self.weights_path
+            "ARCHONPredictor initialized. Weights: '%s'", self.weights_path
         )
 
     def _load_models(self) -> None:
@@ -139,7 +144,7 @@ class YOLOrthoPredictor:
         """Load attribute head weights from a checkpoint file."""
         try:
             from src.models.heads import MultiAttributeHead
-            from src.models.yolortho import _infer_fpn_channels
+            from src.models.archon import _infer_fpn_channels
             import math
 
             checkpoint = torch.load(str(attr_path), map_location=self.device)
@@ -524,3 +529,270 @@ class YOLOrthoPredictor:
         summary = summarize_detections(teeth)
         with open(path, "w") as f:
             json.dump(summary, f, indent=2)
+
+
+# ─── Hybrid Predictor ─────────────────────────────────────────────────────────
+
+class ARCHONHybridPredictor(ARCHONPredictor):
+    """Inference class for ARCHONModel.
+
+    Extends the baseline predictor with:
+    - Hybrid component loading (Swin encoder, cross-attention, hybrid head)
+    - Severity-level disease inference instead of binary probabilities
+    - Quadrant-reinforced linear sum assignment
+
+    Falls back cleanly to baseline ARCHONPredictor behaviour when
+    hybrid_best.pt is not available (e.g. before Phase 3 training).
+
+    Additional Args:
+        hybrid_weights_path: Path to hybrid_best.pt (saved by ARCHONHybridTrainer).
+                             Searched automatically if None.
+        severity_threshold:  Minimum softmax probability for a non-healthy
+                             severity level to be accepted (default 0.4).
+    """
+
+    # Map severity level (0,1,2) to a label suffix
+    SEVERITY_LABELS = {0: "Healthy", 1: "Mild", 2: "Severe"}
+
+    def __init__(
+        self,
+        weights_path: str,
+        device: str = "cuda",
+        conf_threshold: float = 0.1,
+        iou_threshold: float = 0.45,
+        attr_threshold: float = 0.3,
+        img_size: tuple = (640, 1280),
+        attr_weights_path: Optional[str] = None,
+        attr_inference_mode: str = "per_tooth",
+        hybrid_weights_path: Optional[str] = None,
+        severity_threshold: float = 0.4,
+    ):
+        super().__init__(
+            weights_path=weights_path,
+            device=device,
+            conf_threshold=conf_threshold,
+            iou_threshold=iou_threshold,
+            attr_threshold=attr_threshold,
+            img_size=img_size,
+            attr_weights_path=attr_weights_path,
+            attr_inference_mode=attr_inference_mode,
+        )
+        self._hybrid_weights_path = hybrid_weights_path
+        self.severity_threshold = severity_threshold
+
+        # Hybrid components (loaded lazily)
+        self._global_encoder = None
+        self._fusion = None
+        self._hybrid_head = None
+        self._hybrid_loaded = False
+
+    def _load_models(self) -> None:
+        """Load base models plus hybrid components."""
+        super()._load_models()  # loads detection model + binary attr heads + FPN hooks
+        if not self._hybrid_loaded:
+            self._load_hybrid_components()
+
+    def _load_hybrid_components(self) -> None:
+        """Load Swin encoder, cross-attention, and hybrid head from checkpoint."""
+        self._hybrid_loaded = True  # set eagerly to avoid retry loops
+
+        candidates = [
+            self.weights_path.parent / "hybrid_best.pt",
+            self.weights_path.parent.parent / "hybrid_best.pt",
+            Path("weights") / "hybrid_best.pt",
+        ]
+        if self._hybrid_weights_path:
+            candidates.insert(0, Path(self._hybrid_weights_path))
+
+        hybrid_path = next((p for p in candidates if p.exists()), None)
+        if hybrid_path is None:
+            logger.info(
+                "hybrid_best.pt not found — hybrid improvements disabled. "
+                "Run --mode train_hybrid to generate it."
+            )
+            return
+
+        try:
+            from src.models.swin_transformer import GlobalContextEncoder
+            from src.models.cross_attention import MultiScaleFusion
+            from src.models.hybrid_head import HybridMultiTaskHead
+
+            ckpt = torch.load(str(hybrid_path), map_location=self.device)
+            fpn_channels = [320, 640, 640]
+            p5_ch = fpn_channels[-1]
+
+            self._global_encoder = GlobalContextEncoder(in_channels=p5_ch)
+            self._global_encoder.load_state_dict(
+                ckpt.get("global_encoder_state", {}), strict=False
+            )
+            self._global_encoder.to(self.device).eval()
+
+            self._fusion = MultiScaleFusion(fpn_channels=fpn_channels, ctx_channels=p5_ch)
+            self._fusion.load_state_dict(
+                ckpt.get("fusion_state", {}), strict=False
+            )
+            self._fusion.to(self.device).eval()
+
+            self._hybrid_head = HybridMultiTaskHead(in_channels_list=fpn_channels)
+            self._hybrid_head.load_state_dict(
+                ckpt.get("hybrid_head_state", {}), strict=False
+            )
+            self._hybrid_head.to(self.device).eval()
+
+            logger.info(
+                "Hybrid components loaded from '%s' (epoch %s, loss %.4f).",
+                hybrid_path,
+                ckpt.get("epoch", "?"),
+                ckpt.get("loss", float("nan")),
+            )
+        except Exception as e:
+            logger.warning("Could not load hybrid components: %s", e)
+            self._global_encoder = None
+            self._fusion = None
+            self._hybrid_head = None
+
+    def _predict_single(self, img_path) -> List[ToothDetection]:
+        """Run hybrid prediction pipeline on a single image.
+
+        If hybrid components are loaded:
+          1. Run YOLOv8 detection + capture FPN features (via hooks)
+          2. Swin encoder on P5 → global context
+          3. Cross-attention fusion at all scales
+          4. Hybrid head → severity logits + quadrant logits
+          5. Sample per-tooth severity at detected box centres
+          6. Linear sum assignment with quadrant reinforcement
+        Else: falls back to baseline predictor.
+        """
+        if not (self._global_encoder and self._fusion and self._hybrid_head):
+            return super()._predict_single(img_path)
+
+        self._fpn_features = []
+
+        det_results = self._det_model.predict(
+            source=str(img_path),
+            conf=self.conf_threshold,
+            iou=self.iou_threshold,
+            max_det=32,
+            imgsz=list(self.img_size),
+            verbose=False,
+            device=self.device,
+        )
+        if not det_results:
+            return []
+
+        result = det_results[0]
+        if result.boxes is None or len(result.boxes) == 0:
+            return []
+
+        fpn = [f for f in self._fpn_features if f is not None][:3]
+        if len(fpn) < 3:
+            return super()._predict_single(img_path)
+
+        with torch.no_grad():
+            # Hybrid inference
+            global_ctx = self._global_encoder(fpn[2])
+            fpn_fused = self._fusion(fpn, global_ctx)
+            hybrid_out = self._hybrid_head(fpn_fused)
+
+            # Per-tooth sampling (same letterbox math as baseline predictor)
+            P3_STRIDE = 8
+            H_f_p3 = fpn_fused[0].shape[2]
+            W_f_p3 = fpn_fused[0].shape[3]
+            effective_h = H_f_p3 * P3_STRIDE
+            effective_w = W_f_p3 * P3_STRIDE
+
+            h_tgt, w_tgt = self.img_size
+            orig_h, orig_w = result.orig_shape if result.orig_shape else (effective_h, effective_w)
+            lb_scale = min(h_tgt / orig_h, w_tgt / orig_w)
+            pad_top = (effective_h - orig_h * lb_scale) / 2
+            pad_left = (effective_w - orig_w * lb_scale) / 2
+
+            boxes_xywhn = result.boxes.xywhn.cpu().numpy()
+            cx_norm = boxes_xywhn[:, 0]
+            cy_norm = boxes_xywhn[:, 1]
+            cx_lb = cx_norm * orig_w * lb_scale + pad_left
+            cy_lb = cy_norm * orig_h * lb_scale + pad_top
+
+            N = len(result.boxes)
+            # Severity: hybrid_out["severity"] → list of (1, 12, H, W) per scale
+            sev_per_tooth = self._sample_per_tooth(
+                hybrid_out["severity"], cx_lb, cy_lb, effective_h, effective_w, N
+            )  # (N, 12)
+
+            # Quadrant: hybrid_out["quadrant"] → list of (1, 4, H, W) per scale
+            quad_per_tooth = self._sample_per_tooth(
+                hybrid_out["quadrant"], cx_lb, cy_lb, effective_h, effective_w, N
+            )  # (N, 4)
+
+        # Convert severity logits → binary attr probabilities for postprocess compat
+        sev_np = sev_per_tooth.cpu().numpy()   # (N, 12)
+        quad_np = quad_per_tooth.cpu().numpy() # (N, 4)
+
+        import numpy as np
+        from scipy.special import softmax as sp_softmax
+        attr_probs = np.zeros((N, 4), dtype=np.float32)
+        for attr_i in range(4):
+            sev_logits = sev_np[:, attr_i * 3: attr_i * 3 + 3]  # (N, 3)
+            sev_softmax = sp_softmax(sev_logits, axis=1)          # (N, 3)
+            # Binary probability = 1 - P(healthy)
+            attr_probs[:, attr_i] = 1.0 - sev_softmax[:, 0]
+
+        # Quadrant-reinforced linear sum assignment
+        from src.inference.postprocess import postprocess_yolo_output
+        teeth = postprocess_yolo_output(
+            results=result,
+            attr_probs=attr_probs,
+            conf_threshold=self.conf_threshold,
+            attr_threshold=self.attr_threshold,
+            img_shape=(orig_h, orig_w),
+            quadrant_probs=quad_np,
+        )
+
+        # Annotate severity on each ToothDetection
+        for i, tooth in enumerate(teeth):
+            if i < len(sev_np):
+                tooth_sev = []
+                attr_names = ["is_impacted", "has_caries", "has_deepcaries", "has_lesion"]
+                for attr_i, attr_name in enumerate(attr_names):
+                    logits = sev_np[i, attr_i * 3: attr_i * 3 + 3]
+                    sev_level = int(np.argmax(logits))
+                    if sev_level > 0:
+                        tooth_sev.append(f"{attr_name}:{self.SEVERITY_LABELS[sev_level]}")
+                if hasattr(tooth, "severity_details"):
+                    tooth.severity_details = tooth_sev
+
+        return teeth
+
+    @staticmethod
+    def _sample_per_tooth(
+        scale_outputs: List[torch.Tensor],
+        cx_lb: np.ndarray,
+        cy_lb: np.ndarray,
+        effective_h: int,
+        effective_w: int,
+        N: int,
+    ) -> torch.Tensor:
+        """Sample feature maps at each tooth's center, average across scales.
+
+        Args:
+            scale_outputs: List of (1, C, H_f, W_f) tensors per scale.
+            cx_lb, cy_lb:  Letterboxed pixel coordinates for each detection.
+            effective_h/w: Letterboxed image spatial size.
+            N:             Number of detections.
+
+        Returns:
+            (N, C) tensor of sampled+averaged features.
+        """
+        import numpy as np
+        scale_samples = []
+        for feat in scale_outputs:
+            _, C, H_f, W_f = feat.shape
+            per_tooth = []
+            for i in range(N):
+                xf = int(cx_lb[i] * W_f / effective_w)
+                yf = int(cy_lb[i] * H_f / effective_h)
+                xf = max(0, min(xf, W_f - 1))
+                yf = max(0, min(yf, H_f - 1))
+                per_tooth.append(feat[0, :, yf, xf])  # (C,)
+            scale_samples.append(torch.stack(per_tooth, dim=0))  # (N, C)
+        return torch.stack(scale_samples, dim=0).mean(dim=0)  # (N, C)

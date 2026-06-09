@@ -1,6 +1,7 @@
 # ============================================================
 # YOLOrtho Model Configuration
 # Paper: https://arxiv.org/abs/2308.05967
+# Hybrid extension: YOLOv8 + Swin Transformer + Cross-Attention
 # ============================================================
 
 model:
@@ -46,3 +47,28 @@ model:
   iou_threshold: 0.45
   # Max detections per image (max 32 teeth in one X-ray)
   max_det: 32
+
+  # ── Hybrid Architecture (YOLOrthoHybrid) ──────────────────────────────────
+  # Set use_hybrid: true to enable the three proposed improvements:
+  #   A. GlobalContextEncoder  — Swin Transformer on P5 for jaw-wide context
+  #   B. MultiScaleFusion      — Cross-Attention: CNN local + Swin global
+  #   C. HybridMultiTaskHead   — 3-level severity + quadrant auxiliary head
+  # Requires Phase 3 training (--mode train_hybrid after baseline --mode train)
+  use_hybrid: false  # set true to activate during training and inference
+
+  # Swin Transformer settings (GlobalContextEncoder)
+  # Operates on P5 feature map: 20×40 for 640×1280 input at stride 32
+  swin_num_heads: 8         # attention heads — must divide P5 channels (640//8=80 ✓)
+  swin_window_size: 4       # window size ≤ min(H5, W5) = min(20, 40) = 20 ✓
+
+  # Cross-Attention Fusion settings (MultiScaleFusion)
+  fusion_num_heads: 4       # attention heads per scale (reduced for efficiency at P3/P4)
+
+  # Severity head settings (HybridMultiTaskHead)
+  num_severity_levels: 3    # 0=healthy, 1=mild, 2=severe per disease attribute
+  # Severity threshold: minimum softmax P(non-healthy) for disease to be flagged
+  severity_threshold: 0.4
+
+  # Quadrant consistency penalty weight in linear sum assignment (hybrid predictor)
+  # alpha=0.5: moderate penalty for cross-quadrant FDI assignments
+  quadrant_penalty_alpha: 0.5

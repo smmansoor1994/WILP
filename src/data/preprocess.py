@@ -1,7 +1,7 @@
 """
 src/data/preprocess.py
 ======================
-Convert Dentex Challenge 2023 COCO JSON annotations → YOLO extended format.
+ARCHON / ARCHON — Convert Dentex Challenge 2023 COCO JSON annotations → YOLO extended format.
 
 Dataset Folder Layout (DENTEX root provided at runtime via --dentex-root):
 

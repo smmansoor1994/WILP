@@ -1,13 +1,45 @@
-# YOLOrtho: A Unified Framework for Teeth Enumeration and Dental Disease Detection
+# ARCHON — Arch-Contextualized Hierarchical Orthodontic Network
 
-Implementation of the paper:
+> **ARCHON: Arch-Contextualized Hierarchical Orthodontic Network for Severity-Aware Dental Radiograph Analysis**
+
+Built on top of the baseline paper:
 > **YOLOrtho: A Unified Framework for Teeth Enumeration and Dental Disease Detection**  
 > Shenxiao Mei, Chenglong Ma, Feihong Shen, Huikai Wu, Kaidi Shen — Chohotech Inc.  
 > arXiv: https://arxiv.org/abs/2308.05967
 
 ---
 
+## Why ARCHON?
+
+| Letter | Stands for | What it refers to in the model |
+|---|---|---|
+| **A** | Arch-Contextualized | The Swin Transformer `GlobalContextEncoder` operates on the P5 feature map where each token covers one tooth-sized patch — capturing the full **dental arch** (jaw curve) in a single attention pass |
+| **R** | Radiograph | The input modality: panoramic dental X-rays (orthopantomograms / OPGs) |
+| **C** | Cross-Attention | `MultiScaleFusion` uses cross-attention (Q = CNN local features, K/V = Swin global context) to let disease classifiers query anatomical position before making predictions |
+| **H** | Hierarchical | Three-level disease severity (Healthy → Mild → Severe) output by `HybridMultiTaskHead`, and the multi-level FPN (strides 4 / 8 / 16) that processes teeth at multiple scales |
+| **O** | Orthodontic | The clinical domain: FDI-numbered tooth enumeration, a core task in orthodontic and restorative treatment planning |
+| **N** | Network | The end-to-end deep learning model |
+
+**Full paper title:**
+> *ARCHON: Arch-Contextualized Hierarchical Orthodontic Network for Severity-Aware Dental Radiograph Analysis*
+
+**One-sentence description:**
+ARCHON extends the ARCHON detection backbone with a Swin Transformer encoder that captures the full dental arch context, cross-attention fusion that guides disease features with global anatomical knowledge, and a hierarchical multi-task head that outputs clinically actionable three-level severity grades alongside FDI-consistent tooth enumeration on panoramic radiographs.
+
+---
+
+| Document | Purpose |
+|---|---|
+| `README.md` | Architecture overview, setup, and quick start (this file) |
+| `PROJECT_GUIDE.md` | Detailed code walkthrough, label format, training phases, JSON schemas |
+| `WORKFLOW.md` | End-to-end call graph for every mode including `train_hybrid` |
+| `IMPROVEMENTS.md` | What changed from the baseline, why, and clinical benefit |
+
+---
+
 ## What This Implements
+
+### Baseline (foundation paper — arXiv:2308.05967)
 
 | Paper Section | Code Location | Description |
 |---|---|---|
@@ -21,9 +53,21 @@ Implementation of the paper:
 | §2.1 Pseudo Labeling | `src/data/pseudo_label.py` | Healthy teeth labeling for Part 3 |
 | §2.3 Post-Processing | `src/inference/postprocess.py` | Linear sum assignment for FDI |
 
+### ARCHON Improvements (this work)
+
+| Improvement | Code Location | Description |
+|---|---|---|
+| A. GlobalContextEncoder | `src/models/swin_transformer.py` | Swin Transformer on P5 for full dental arch context |
+| B. MultiScaleFusion | `src/models/cross_attention.py` | Cross-attention: CNN local features guided by global context |
+| C. HybridMultiTaskHead | `src/models/hybrid_head.py` | 3-level severity heads + quadrant auxiliary classifier |
+| D. CLAHE Augmentation | `src/data/augmentation.py` | Local contrast enhancement for early lesion visibility |
+| E. Quadrant-Consistency | `src/inference/postprocess.py` | Quadrant penalty in Hungarian FDI assignment |
+
 ---
 
 ## Architecture
+
+### Baseline
 
 ```
 Input: Panoramic X-ray (1280×640)
@@ -42,6 +86,41 @@ Post-Processing: Linear Sum Assignment  (1 unique FDI per detection)
   │
   ▼
 Output: Structured tooth detections with disease flags
+```
+
+### Hybrid (Phase 3, additive on top of baseline)
+
+```
+Backbone (frozen) → P3, P4, P5 features
+                              │
+              ┌───────────────┴────────────────────┐
+              │                                    │
+              ▼                                    ▼
+     P5 only (stride 32)             P3, P4, P5 (all scales)
+              │                                    │
+              ▼                                    │
+  GlobalContextEncoder                             │
+  (2× Swin Transformer blocks)                     │
+  window=4, heads=8                                │
+              │                                    │
+              │ global_context ───────────────────►│
+                                                   ▼
+                                       MultiScaleFusion
+                                       Cross-Attention Q=CNN, K/V=Swin
+                                       → fused P3, fused P4, fused P5
+                                                   │
+                                                   ▼
+                                       HybridMultiTaskHead
+                                       ├── SeverityHead ×4 diseases
+                                       │   (Healthy / Mild / Severe)
+                                       └── QuadrantAwareFDIHead
+                                           (P(Q1) / P(Q2) / P(Q3) / P(Q4))
+                                                   │
+                                                   ▼
+                              Linear Sum Assignment + quadrant-consistency penalty
+                                                   │
+                                                   ▼
+                              Output: FDI + disease flags + severity_details
 ```
 
 ---
@@ -95,6 +174,19 @@ No download needed. The dataset is expected on local disk. Pass `--dentex-root` 
 
 ## Running the Pipeline
 
+### Available modes
+
+| Mode | Purpose |
+|---|---|
+| `preprocess` | Convert DENTEX COCO JSON → extended YOLO labels |
+| `pseudo_label` | Generate healthy-tooth pseudo labels for Part 3 + unlabelled images |
+| `train` | Phase 1 detection + Phase 2 fine-tuning + Phase 2b attribute heads |
+| `train_attr` | Re-train binary disease attribute heads only (Phase 2b in isolation) |
+| `train_hybrid` | Phase 3: train Swin encoder + cross-attention + severity heads **[NEW]** |
+| `evaluate` | Run YOLO val on official validation set |
+| `predict` | Run inference on new X-rays (auto-loads hybrid weights when available) |
+| `full` | Run all baseline stages end-to-end |
+
 ### Full pipeline (recommended)
 ```bash
 python main.py --mode full --device cuda --dentex-root D:/WILP/sem-4/Dataset/DENTEX/DENTEXsample
@@ -123,11 +215,16 @@ python main.py --mode pseudo_label
 # Step 4: Re-train with pseudo labels + disease attribute heads
 python main.py --mode train --device cuda   # or --device cpu if no GPU
 
-# Step 5: Evaluate on official validation set (validation_triple.json)
-python main.py --mode evaluate --weights weights/yolortho_best.pt
+# Step 5: Train hybrid components — Swin encoder + cross-attention + severity heads
+#         (runs on top of the Phase 2 checkpoint; backbone stays frozen)
+python main.py --mode train_hybrid --device cuda
 
-# Step 6: Run inference on new X-rays
-python main.py --mode predict --input path/to/xray.jpg --weights weights/yolortho_best.pt
+# Step 6: Evaluate on official validation set (validation_triple.json)
+python main.py --mode evaluate --weights weights/archon_best.pt
+
+# Step 7: Run inference on new X-rays
+#         (auto-loads hybrid_best.pt when present for severity-annotated output)
+python main.py --mode predict --input path/to/xray.jpg --weights weights/archon_best.pt
 ```
 
 ### Resume interrupted training
@@ -145,7 +242,7 @@ Use `verify_local_image.py` to run inference on any local dental X-ray and displ
 ```powershell
 python verify_local_image.py `
   --image          <path to panoramic X-ray (.jpg / .png)> `
-  --weights        <path to yolortho_best.pt> `
+  --weights        <path to archon_best.pt> `
   --attr-weights   <path to attr_best.pt> `
   --device         cpu `
   --conf           0.25 `
@@ -160,11 +257,11 @@ python verify_local_image.py `
 ```powershell
 python verify_local_image.py `
   --image "D:\WILP\sem-4\Dataset\DENTEX\DENTEX\training_data\quadrant-enumeration-disease\xrays\train_10.png" `
-  --weights "D:\WILP\Workingcode\Baseline\WILP\weights\yolortho_best.pt" `
+  --weights "D:\WILP\Workingcode\Baseline\WILP\weights\archon_best.pt" `
   --attr-weights "D:\WILP\Workingcode\Baseline\WILP\weights\attr_best.pt" `
   --device cuda `
   --attr-threshold 0.3 `
-  --save-dir "C:\Users\Z0046KUF\Downloads\yolortho_results" `
+  --save-dir "C:\Users\Z0046KUF\Downloads\archon_results" `
   --show
 ```
 
@@ -176,7 +273,7 @@ python verify_local_image.py `
 ```powershell
 python verify_local_image.py `
   --image "C:\Users\Z0046KUF\Downloads\pnmc.jpg" `
-  --weights "D:\WILP\Workingcode\Baseline\WILP\weights\yolortho_best.pt" `
+  --weights "D:\WILP\Workingcode\Baseline\WILP\weights\archon_best.pt" `
   --device cpu `
   --show
 ```
@@ -185,12 +282,12 @@ python verify_local_image.py `
 ```powershell
 python verify_local_image.py `
   --image "C:\Users\Z0046KUF\Downloads\pnmc.jpg" `
-  --weights "D:\WILP\Workingcode\Baseline\WILP\weights\yolortho_best.pt" `
+  --weights "D:\WILP\Workingcode\Baseline\WILP\weights\archon_best.pt" `
   --attr-weights "D:\WILP\Workingcode\Baseline\WILP\weights\attr_best.pt" `
   --device cpu `
   --conf 0.10 `
   --attr-threshold 0.3 `
-  --save-dir "C:\Users\Z0046KUF\Downloads\yolortho_results" `
+  --save-dir "C:\Users\Z0046KUF\Downloads\archon_results" `
   --show
 ```
 
@@ -199,7 +296,7 @@ python verify_local_image.py `
 | Option | Default | Description |
 |---|---|---|
 | `--image` | *(required)* | Path to panoramic X-ray (`.jpg` / `.png`) |
-| `--weights` | auto-detected | `yolortho_best.pt` — detection + FDI enumeration model |
+| `--weights` | auto-detected | `archon_best.pt` — detection + FDI enumeration model |
 | `--attr-weights` | auto-searched | `attr_best.pt` — disease attribute head weights |
 | `--device` | `cpu` | `cpu` or `cuda` (GPU) |
 | `--conf` | `0.25` | Detection confidence threshold — lower = more teeth detected |
@@ -222,7 +319,7 @@ python verify_local_image.py `
 
 ### Auto weight search (if `--weights` is omitted)
 The script searches for weights in this order:
-1. `weights/yolortho_best.pt`
+1. `weights/archon_best.pt`
 2. `outputs/runs/phase2/weights/best.pt`
 3. `outputs/runs/phase1/weights/best.pt`
 
@@ -240,7 +337,7 @@ Use `--no-save` to suppress all file output.
 ## Project Structure
 
 ```
-YOLOrtho/
+ARCHON/
 ├── main.py                     # Entry point — runs all pipeline stages
 ├── requirements.txt
 ├── PROJECT_GUIDE.md            # Detailed step-by-step guide
@@ -261,27 +358,33 @@ YOLOrtho/
 │   ├── data/
 │   │   ├── preprocess.py       # COCO JSON → YOLO label conversion (all 3 parts + val)
 │   │   ├── pseudo_label.py     # Pseudo-labeling: Part 3 healthy + unlabelled images
-│   │   ├── augmentation.py     # Flip + quadrant remapping augmentation
+│   │   ├── augmentation.py     # Flip + CLAHE + quadrant remapping augmentation  [+CLAHE]
 │   │   └── dataset.py          # PyTorch Dataset with extended labels
 │   │
 │   ├── models/
 │   │   ├── coord_conv.py       # CoordConv: add (x,y) coordinate channels
-│   │   ├── yolortho.py         # Full YOLOrtho model (wraps YOLOv8x)
-│   │   └── heads.py            # Disease attribute prediction heads
+│   │   ├── yolortho.py         # `ARCHON` base + `ARCHONModel` hybrid        [+Hybrid]
+│   │   ├── heads.py            # Binary disease attribute prediction heads
+│   │   ├── swin_transformer.py # GlobalContextEncoder (Swin Transformer)      [NEW]
+│   │   ├── cross_attention.py  # MultiScaleFusion (Cross-Attention)           [NEW]
+│   │   └── hybrid_head.py      # HybridMultiTaskHead (Severity + Quadrant)    [NEW]
 │   │
 │   ├── training/
-│   │   ├── trainer.py          # 2-phase training orchestrator
+│   │   ├── trainer.py          # ARCHONTrainer + ARCHONHybridTrainer      [+Hybrid]
 │   │   └── loss.py             # Hierarchical BCE + detection loss
 │   │
 │   ├── inference/
-│   │   ├── predictor.py        # End-to-end inference pipeline
-│   │   └── postprocess.py      # Linear sum assignment for FDI uniqueness
+│   │   ├── predictor.py        # ARCHONPredictor + ARCHONHybridPredictor  [+Hybrid]
+│   │   └── postprocess.py      # Linear sum assignment + quadrant penalty     [+Penalty]
 │   │
 │   └── utils/
 │       ├── fdi.py              # FDI tooth numbering system utilities
 │       └── visualize.py        # Bounding box + dental chart visualization
 │
-├── weights/                    # Saved model weights
+├── weights/
+│   ├── archon_best.pt        # Phase 2 detection checkpoint
+│   ├── attr_best.pt            # Phase 2b binary attribute head checkpoint
+│   └── hybrid_best.pt          # Phase 3 Swin+Cross-Attn+Severity checkpoint  [NEW]
 └── outputs/
     ├── runs/                   # Training logs + checkpoints
     └── predictions/            # Inference results (images + JSON)

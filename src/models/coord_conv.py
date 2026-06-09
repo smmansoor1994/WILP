@@ -1,14 +1,14 @@
 """
 src/models/coord_conv.py
 ========================
-CoordConv: Coordinate-Aware Convolution for position-sensitive tasks.
+ARCHON / ARCHON — CoordConv: Coordinate-Aware Convolution for position-sensitive tasks.
 
 Reference:
   "An Intriguing Failing of Convolutional Neural Networks and the CoordConv Solution"
   Liu et al., NeurIPS 2018
   https://arxiv.org/abs/1807.03247
 
-Motivation for YOLOrtho (Section 2.2 of the paper):
+Motivation for ARCHON (Section 2.2 of the paper):
   Standard convolution is translation-invariant — it produces the same output
   regardless of WHERE in the image the feature appears.
   For teeth enumeration, POSITION is the primary signal:
