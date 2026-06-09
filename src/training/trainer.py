@@ -254,7 +254,7 @@ class ARCHONTrainer:
         import torch
         from torch.optim import AdamW
         from torch.optim.lr_scheduler import CosineAnnealingLR
-        from src.models.archon import build_archon_base, ATTRIBUTE_NAMES
+        from src.models.yolortho import build_archon_base, ATTRIBUTE_NAMES
         from src.training.loss import AttributeBCELoss
         from src.data.dataset import ARCHONDataset
 
@@ -719,7 +719,7 @@ class ARCHONHybridTrainer(ARCHONTrainer):
         import torch
         from torch.optim import AdamW
         from torch.optim.lr_scheduler import CosineAnnealingLR
-        from src.models.archon import build_archon_model
+        from src.models.yolortho import build_archon_model
         from src.training.loss import AttributeBCELoss
         from src.models.hybrid_head import SeverityLoss, QuadrantAuxLoss
         from src.data.dataset import ARCHONDataset

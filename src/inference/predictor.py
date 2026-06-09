@@ -144,7 +144,7 @@ class ARCHONPredictor:
         """Load attribute head weights from a checkpoint file."""
         try:
             from src.models.heads import MultiAttributeHead
-            from src.models.archon import _infer_fpn_channels
+            from src.models.yolortho import _infer_fpn_channels
             import math
 
             checkpoint = torch.load(str(attr_path), map_location=self.device)

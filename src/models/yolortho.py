@@ -70,7 +70,7 @@ Architecture overview (ARCHONModel — proposed improvement):
   └────────────────────────────────────────────────────────────┘
 
 Usage:
-    from src.models.archon import build_archon_base, build_archon_model
+    from src.models.yolortho import build_archon_base, build_archon_model
     model = build_archon_base(num_classes=32, device='cuda')              # baseline
     model = build_archon_model(num_classes=32, device='cuda')       # hybrid
 """
