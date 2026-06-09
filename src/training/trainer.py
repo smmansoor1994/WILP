@@ -625,6 +625,8 @@ def _compute_attr_pos_weight(dataset) -> List[float]:
             lbl_path = dataset.labels_dir / (img_path.stem + ".txt")
             if not lbl_path.exists():
                 continue
+            if lbl_path.stat().st_size == 0:
+                continue  # healthy tooth — no labels, not an error
             rows = np.loadtxt(str(lbl_path), ndmin=2)
             if rows.shape[1] < 10:
                 continue

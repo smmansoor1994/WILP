@@ -161,13 +161,17 @@ class ARCHONPredictor:
             self._attr_heads.eval()
 
             # ── Sanity check: warn if heads are still at bias initialisation ──
+            # init_bias ≈ -4.595 (sigmoid → 0.01).  We allow a generous ±0.5
+            # margin because 2–5 training epochs with heavily imbalanced data
+            # move biases only slightly from initialisation while still learning.
+            # A tighter threshold (e.g. 0.01) falsely fires after real training.
             state = checkpoint.get("attr_heads_state", {})
             init_bias = -math.log(99)  # ≈ -4.595 — what nn.init sets at startup
             bias_vals = [
                 v.item() for k, v in state.items()
                 if "out.bias" in k
             ]
-            if bias_vals and all(abs(b - init_bias) < 0.01 for b in bias_vals):
+            if bias_vals and all(abs(b - init_bias) < 0.5 for b in bias_vals):
                 logger.warning(
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     "  UNTRAINED ATTR HEADS DETECTED in '%s'\n"
@@ -502,14 +506,21 @@ class ARCHONPredictor:
 
         logger.info("Running evaluation on '%s' split ...", split)
 
+        # NOTE: do NOT pass conf= here.  YOLO .val() computes mAP by sweeping
+        # confidence thresholds internally (default sweep starts at 0.001).
+        # Passing conf=self.conf_threshold (0.1) would discard all predictions
+        # below that score BEFORE the sweep, collapsing mAP to 0 on a barely-
+        # trained model where most valid detections score in the 0.01–0.09 range.
         metrics = self._det_model.val(
             data=data_yaml,
             split=split,
             imgsz=list(self.img_size),
-            conf=self.conf_threshold,
             iou=self.iou_threshold,
             max_det=32,
             device=self.device,
+            project=str(Path(data_yaml).parent.parent / "outputs" / "runs"),
+            name="eval",
+            exist_ok=True,
             verbose=True,
         )
 

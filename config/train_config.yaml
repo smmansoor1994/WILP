@@ -29,7 +29,7 @@ training:
                            #   • CosineAnnealingLR decays from 1e-3 → 1e-5 over
                            #     these epochs; 50 gives a gentler decay slope.
 
-  batch_size: 8              # Reduce if OOM; 8 fits on 16GB GPU with 1280x640 input
+  batch_size: 4              # 4 is safe on T4/16GB at 1280px; use 8 only on A100/H100
   workers: 4                 # DataLoader worker threads
   seed: 42
 
