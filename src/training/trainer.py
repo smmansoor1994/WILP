@@ -503,6 +503,13 @@ class ARCHONTrainer:
         else:
             num_epochs = t.get("phase2_epochs", default_epochs)
 
+        # Phase 2 fine-tunes from Phase 1 best.pt: use a lower lr to avoid
+        # immediately overshooting the good Phase 1 minimum and oscillating.
+        if phase == 2:
+            lr0 = t.get("phase2_lr0", t.get("lr0", 0.01))
+        else:
+            lr0 = t.get("lr0", 0.01)
+
         return dict(
             data=data_yaml,
             epochs=num_epochs,
@@ -511,7 +518,7 @@ class ARCHONTrainer:
             workers=t.get("workers", 4),
             device=self.device,
             optimizer=t.get("optimizer", "SGD"),
-            lr0=t.get("lr0", 0.01),
+            lr0=lr0,
             lrf=t.get("lrf", 0.01),
             momentum=t.get("momentum", 0.937),
             weight_decay=t.get("weight_decay", 0.0005),

@@ -35,7 +35,13 @@ training:
 
   # Optimizer
   optimizer: "SGD"           # SGD or AdamW
-  lr0: 0.01                  # Initial learning rate
+  lr0: 0.01                  # Initial learning rate (Phase 1 — training from scratch)
+  phase2_lr0: 0.002          # Initial learning rate for Phase 2 (fine-tuning from Phase 1).
+                             #   Fine-tuning from pretrained weights needs a lower lr to
+                             #   avoid immediately overshooting the good Phase 1 minimum.
+                             #   0.01 caused the model to reach best mAP at epoch 2 then
+                             #   oscillate for 50 epochs before early-stop. 0.001–0.003
+                             #   keeps the Phase 1 knowledge while still improving. 
   lrf: 0.01                  # Final lr = lr0 * lrf (cosine decay)
   momentum: 0.937
   weight_decay: 0.0005

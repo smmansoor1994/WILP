@@ -165,13 +165,22 @@ class ARCHONPredictor:
             # margin because 2–5 training epochs with heavily imbalanced data
             # move biases only slightly from initialisation while still learning.
             # A tighter threshold (e.g. 0.01) falsely fires after real training.
+            #
+            # IMPORTANT: with per-tooth supervision on heavily imbalanced data
+            # (e.g. pos_weight=20 for rare diseases), the conv WEIGHTS carry the
+            # discrimination and the output BIAS can legitimately stay near -4.595.
+            # We therefore also check the saved loss — if it converged below 1.0
+            # the model genuinely trained, even if biases are close to init.
             state = checkpoint.get("attr_heads_state", {})
+            checkpoint_loss = checkpoint.get("loss", float("inf"))
             init_bias = -math.log(99)  # ≈ -4.595 — what nn.init sets at startup
             bias_vals = [
                 v.item() for k, v in state.items()
                 if "out.bias" in k
             ]
-            if bias_vals and all(abs(b - init_bias) < 0.5 for b in bias_vals):
+            biases_near_init = bias_vals and all(abs(b - init_bias) < 0.5 for b in bias_vals)
+            loss_suggests_untrained = checkpoint_loss > 1.0
+            if biases_near_init and loss_suggests_untrained:
                 logger.warning(
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     "  UNTRAINED ATTR HEADS DETECTED in '%s'\n"
@@ -188,9 +197,13 @@ class ARCHONPredictor:
             else:
                 trained_epochs = checkpoint.get("epoch", "?")
                 best_loss = checkpoint.get("loss", "?")
+                bias_info = (
+                    f" (biases near init but loss={best_loss:.4f} ← weights carry discrimination)"
+                    if biases_near_init else ""
+                )
                 logger.info(
-                    "Attr heads appear trained: saved epoch=%s, best_loss=%s",
-                    trained_epochs, best_loss,
+                    "Attr heads appear trained: saved epoch=%s, best_loss=%s%s",
+                    trained_epochs, best_loss, bias_info,
                 )
 
             # Attach hooks to capture FPN features
