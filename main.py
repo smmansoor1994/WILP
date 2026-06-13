@@ -392,7 +392,9 @@ def run_full_pipeline(args: argparse.Namespace) -> None:
       2. Train Phase 1 (detection only, needed for pseudo labeling)
       3. Generate pseudo labels (Part 3 healthy + unlabelled images)
       4. Train Phase 2 (full model with disease attributes)
-      5. Evaluate on validation set
+      5. Train Phase 3 (Swin + CrossAttention + HybridMultiTaskHead on frozen backbone)
+      6. Merge all phases into weights/archon_best.pt
+      7. Evaluate on validation set
     """
     logger.info("=" * 70)
     logger.info("  ARCHON FULL PIPELINE")
@@ -421,15 +423,21 @@ def run_full_pipeline(args: argparse.Namespace) -> None:
 
     stage_pseudo_label(args)
 
-    # Full training: Phase 1 weights exist → skipped automatically.
     # Phase 2 + attribute heads trained on all data including pseudo labels.
+    # Phase 1 weights already exist → Phase 1 is skipped automatically.
     stage_train(args)
+
+    # Phase 3: Swin Transformer + Cross-Attention + HybridMultiTaskHead.
+    # Backbone is frozen; only the three new components are trained.
+    # On completion, all phases are merged into weights/archon_best.pt.
+    stage_train_hybrid(args)
+
     stage_evaluate(args)
 
     logger.info("=" * 70)
     logger.info("  Full pipeline complete.")
-    logger.info("  Best weights: weights/archon_best.pt")
-    logger.info("  Predictions:  outputs/predictions/")
+    logger.info("  Best weights (all phases): weights/archon_best.pt")
+    logger.info("  Predictions:               outputs/predictions/")
     logger.info("=" * 70)
 
 

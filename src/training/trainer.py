@@ -941,3 +941,76 @@ class ARCHONHybridTrainer(ARCHONTrainer):
 
         logger.info("Hybrid training complete. Best loss: %.4f", best_loss)
         logger.info("hybrid_best.pt saved to '%s'.", weights_hybrid_path)
+
+        # ── Merge all phases into a single archon_best.pt ─────────────────────
+        self._merge_all_phases_into_archon_best(
+            base_weights=base_weights,
+            hybrid_path=weights_hybrid_path,
+        )
+
+    def _merge_all_phases_into_archon_best(
+        self, base_weights: str, hybrid_path: "Path"
+    ) -> None:
+        """Merge Phase 1+2 backbone, Phase 2b attribute heads, and Phase 3 hybrid
+        components into a single unified weights/archon_best.pt checkpoint.
+
+        Checkpoint structure:
+          "backbone_state"       — YOLOv8 detection backbone + Phase 2 detection head
+          "attr_heads_state"     — Phase 2b binary attribute heads (4 disease attrs)
+          "global_encoder_state" — Phase 3 Swin Transformer global context encoder
+          "fusion_state"         — Phase 3 CrossAttention multi-scale fusion
+          "hybrid_head_state"    — Phase 3 severity + quadrant auxiliary head
+          "phases"               — list of merged phases for provenance
+        """
+        import torch
+
+        final_path = self.project_root / "weights" / "archon_best.pt"
+        logger.info("=" * 60)
+        logger.info("Merging all phases into: %s", final_path)
+
+        # Load Phase 2 backbone checkpoint (ultralytics format)
+        backbone_ckpt = torch.load(base_weights, map_location="cpu")
+        # Ultralytics .pt files store the model state under various keys
+        backbone_state = (
+            backbone_ckpt.get("model")
+            or backbone_ckpt.get("model_state_dict")
+            or backbone_ckpt
+        )
+        # If it's an ultralytics model object, extract its state dict
+        if hasattr(backbone_state, "state_dict"):
+            backbone_state = backbone_state.state_dict()
+
+        merged: dict = {
+            "backbone_state":       backbone_state,
+            "attr_heads_state":     None,
+            "global_encoder_state": None,
+            "fusion_state":         None,
+            "hybrid_head_state":    None,
+            "phases": ["phase1", "phase2"],
+        }
+
+        # Merge Phase 2b attribute heads
+        attr_path = self.project_root / "weights" / "attr_best.pt"
+        if attr_path.exists():
+            attr_ckpt = torch.load(attr_path, map_location="cpu")
+            merged["attr_heads_state"] = attr_ckpt.get("attr_heads_state")
+            merged["phases"].append("phase2b_attr")
+            logger.info("  + attr heads from '%s'", attr_path)
+        else:
+            logger.warning("  attr_best.pt not found — attribute heads omitted from merge.")
+
+        # Merge Phase 3 hybrid components
+        if hybrid_path.exists():
+            hybrid_ckpt = torch.load(hybrid_path, map_location="cpu")
+            merged["global_encoder_state"] = hybrid_ckpt.get("global_encoder_state")
+            merged["fusion_state"]         = hybrid_ckpt.get("fusion_state")
+            merged["hybrid_head_state"]    = hybrid_ckpt.get("hybrid_head_state")
+            merged["phases"].append("phase3_hybrid")
+            logger.info("  + hybrid components from '%s'", hybrid_path)
+        else:
+            logger.warning("  hybrid_best.pt not found — hybrid components omitted from merge.")
+
+        torch.save(merged, final_path)
+        logger.info("Unified archon_best.pt saved → %s", final_path)
+        logger.info("  Merged phases: %s", merged["phases"])
+        logger.info("=" * 60)

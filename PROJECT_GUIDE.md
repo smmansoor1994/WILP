@@ -577,7 +577,8 @@ All in `config/train_config.yaml` and `config/model_config.yaml`:
 | `fliplr` | 0.5 | 50% horizontal flip (quadrant-aware class remapping) |
 | `mosaic` | 0.0 | Disabled — panoramic X-rays must not be mixed |
 | `hsv_s` | 0.0 | X-rays are grayscale; saturation augmentation off |
-| `lr0` | 0.01 | Initial learning rate for detection phases |
+| `lr0` | 0.01 | Initial learning rate for Phase 1 (training from scratch) |
+| `phase2_lr0` | 0.002 | Initial learning rate for Phase 2 (fine-tuning from Phase 1 best.pt). Lower rate prevents overshooting the Phase 1 minimum; without this the model peaked at epoch 2 then degraded for 50 epochs before early-stop. |
 | `optimizer` | AdamW | Paper uses AdamW |
 | `clahe_prob` | 0.5 | CLAHE augmentation probability during Phase 3 **[NEW]** |
 | `swin_num_heads` | 8 | Attention heads in Swin blocks **[NEW]** |
