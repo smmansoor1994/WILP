@@ -115,28 +115,82 @@ class ARCHONPredictor:
         logger.info("Loading model from '%s' on device '%s' ...", self.weights_path, self.device)
 
         from ultralytics import YOLO
-        self._det_model = YOLO(str(self.weights_path))
 
-        # Try to load attribute head weights if available.
-        # Search order: same dir → parent dir → user-supplied path (set via attr_weights_path)
-        _attr_candidates = [
-            self.weights_path.parent / "attr_best.pt",       # sibling of main weights
-            self.weights_path.parent.parent / "attr_best.pt",  # one level up
-        ]
-        if hasattr(self, "attr_weights_path") and self.attr_weights_path:
-            _attr_candidates.insert(0, Path(self.attr_weights_path))
+        # ── Detect our custom merged checkpoint format ─────────────────────────
+        # After Phase 3 training, archon_best.pt is saved in our own format with
+        # keys: backbone_state, attr_heads_state, global_encoder_state, etc.
+        # ultralytics YOLO() requires its own format (must have a 'model' key).
+        # Detect this and route accordingly.
+        _merged_ckpt = None
+        try:
+            _probe = torch.load(str(self.weights_path), map_location="cpu", weights_only=False)
+            if isinstance(_probe, dict) and "backbone_state" in _probe:
+                _merged_ckpt = _probe
+                logger.info(
+                    "Detected unified ARCHON checkpoint (phases: %s). "
+                    "Locating ultralytics detection backbone for YOLO ...",
+                    _probe.get("phases", []),
+                )
+        except Exception:
+            pass  # not our format — let YOLO handle it normally
 
-        attr_path = next((p for p in _attr_candidates if p.exists()), None)
-        if attr_path:
-            logger.info("Found attribute weights at '%s'.", attr_path)
-            self._load_attr_heads(attr_path)
+        if _merged_ckpt is not None:
+            # Find the ultralytics-compatible detection backbone (phase2 best.pt)
+            _weights_dir = self.weights_path.parent
+            _det_candidates = [
+                _weights_dir / "phase2_best.pt",
+                _weights_dir.parent / "outputs" / "runs" / "phase2" / "weights" / "best.pt",
+            ]
+            _det_path = next((p for p in _det_candidates if p.exists()), None)
+            if _det_path is None:
+                raise FileNotFoundError(
+                    "Unified archon_best.pt found but could not locate the Phase 2 "
+                    "detection backbone (phase2_best.pt). Searched: "
+                    + ", ".join(str(p) for p in _det_candidates)
+                )
+            logger.info("Using Phase 2 detection backbone: '%s'", _det_path)
+            self._det_model = YOLO(str(_det_path))
         else:
-            logger.warning(
-                "Attribute weights (attr_best.pt) not found. "
-                "Disease attributes will be unavailable (all teeth shown as healthy). "
-                "Searched: %s",
-                ", ".join(str(p) for p in _attr_candidates),
+            self._det_model = YOLO(str(self.weights_path))
+
+        # ── Load attribute heads ───────────────────────────────────────────────
+        # Prefer attr_heads_state embedded in the merged checkpoint; fall back to
+        # searching for a standalone attr_best.pt alongside the weights file.
+        if _merged_ckpt is not None and _merged_ckpt.get("attr_heads_state"):
+            # Write a temporary attr checkpoint so _load_attr_heads can consume it
+            import tempfile, os
+            _tmp_attr = Path(tempfile.mktemp(suffix="_attr_best.pt"))
+            torch.save(
+                {"attr_heads_state": _merged_ckpt["attr_heads_state"], "loss": 0.0},
+                _tmp_attr,
             )
+            try:
+                self._load_attr_heads(_tmp_attr)
+            finally:
+                try:
+                    os.unlink(_tmp_attr)
+                except OSError:
+                    pass
+        else:
+            # Standard search path for standalone attr_best.pt
+            _attr_candidates = [
+                self.weights_path.parent / "attr_best.pt",
+                self.weights_path.parent.parent / "attr_best.pt",
+            ]
+            if hasattr(self, "attr_weights_path") and self.attr_weights_path:
+                _attr_candidates.insert(0, Path(self.attr_weights_path))
+
+            attr_path = next((p for p in _attr_candidates if p.exists()), None)
+            if attr_path:
+                logger.info("Found attribute weights at '%s'.", attr_path)
+                self._load_attr_heads(attr_path)
+            else:
+                logger.warning(
+                    "Attribute weights (attr_best.pt) not found. "
+                    "Disease attributes will be unavailable (all teeth shown as healthy). "
+                    "Searched: %s",
+                    ", ".join(str(p) for p in _attr_candidates),
+                )
 
         logger.info("Models loaded.")
 
