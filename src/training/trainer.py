@@ -145,7 +145,7 @@ class ARCHONTrainer:
         logger.info("PHASE 1 ONLY: Pre-training on quadrant + enumeration data")
         logger.info("=" * 60)
         self._train_phase1()
-        self._promote_weights(phase=1)
+        self._promote_weights(phase=1)  # _train_phase1 no longer calls this
 
     def _train_phase1(self) -> None:
         """Phase 1: standard YOLOv8 training on Parts 1+2 only.
@@ -183,8 +183,6 @@ class ARCHONTrainer:
             logger.info("Phase 1 best weights: '%s'", best)
         else:
             logger.warning("Phase 1 best weights not found at expected path.")
-
-        self._promote_weights(phase=1)
 
     def _train_phase2(self, pretrain_weights: str) -> None:
         """Phase 2: fine-tune with disease attribute heads on all data.
@@ -994,34 +992,30 @@ class ARCHONHybridTrainer(ARCHONTrainer):
         logger.info("=" * 60)
         logger.info("Merging all phases into: %s", final_path)
 
-        # Load Phase 2 backbone checkpoint (ultralytics format)
-        backbone_ckpt = torch.load(base_weights, map_location="cpu", weights_only=False)
-        # Ultralytics .pt files store the model state under various keys
-        backbone_state = (
-            backbone_ckpt.get("model")
-            or backbone_ckpt.get("model_state_dict")
-            or backbone_ckpt
-        )
-        # If it's an ultralytics model object, extract its state dict
-        if hasattr(backbone_state, "state_dict"):
-            backbone_state = backbone_state.state_dict()
-
+        # Store the path to the ultralytics-compatible backbone rather than the
+        # full 136 MB state dict. The predictor and evaluate modes need a YOLO-
+        # loadable file; keeping just the path avoids doubling disk usage and
+        # makes the save/load ~30× faster.
         merged: dict = {
-            "backbone_state":       backbone_state,
+            "det_weights_path":     str(base_weights),  # ultralytics-compatible .pt
             "attr_heads_state":     None,
+            "attr_loss":            None,
             "global_encoder_state": None,
             "fusion_state":         None,
             "hybrid_head_state":    None,
             "phases": ["phase1", "phase2"],
         }
 
-        # Merge Phase 2b attribute heads
+        # Merge Phase 2b attribute heads (and preserve the training loss for
+        # the predictor's sanity check so it doesn't report misleading values).
         attr_path = self.project_root / "weights" / "attr_best.pt"
         if attr_path.exists():
             attr_ckpt = torch.load(attr_path, map_location="cpu", weights_only=False)
             merged["attr_heads_state"] = attr_ckpt.get("attr_heads_state")
+            merged["attr_loss"]        = attr_ckpt.get("loss")
             merged["phases"].append("phase2b_attr")
-            logger.info("  + attr heads from '%s'", attr_path)
+            logger.info("  + attr heads from '%s' (loss=%.4f)",
+                        attr_path, merged["attr_loss"] or float("nan"))
         else:
             logger.warning("  attr_best.pt not found — attribute heads omitted from merge.")
 
@@ -1039,4 +1033,5 @@ class ARCHONHybridTrainer(ARCHONTrainer):
         torch.save(merged, final_path)
         logger.info("Unified archon_best.pt saved → %s", final_path)
         logger.info("  Merged phases: %s", merged["phases"])
+        logger.info("  Detection backbone: %s", merged["det_weights_path"])
         logger.info("=" * 60)

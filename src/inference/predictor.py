@@ -124,7 +124,7 @@ class ARCHONPredictor:
         _merged_ckpt = None
         try:
             _probe = torch.load(str(self.weights_path), map_location="cpu", weights_only=False)
-            if isinstance(_probe, dict) and "backbone_state" in _probe:
+            if isinstance(_probe, dict) and "det_weights_path" in _probe:
                 _merged_ckpt = _probe
                 logger.info(
                     "Detected unified ARCHON checkpoint (phases: %s). "
@@ -135,9 +135,12 @@ class ARCHONPredictor:
             pass  # not our format — let YOLO handle it normally
 
         if _merged_ckpt is not None:
-            # Find the ultralytics-compatible detection backbone (phase2 best.pt)
+            # The merged checkpoint stores the path to the ultralytics .pt file.
+            # Fall back to searching beside the weights if the stored path moved.
+            _stored_path = Path(_merged_ckpt["det_weights_path"])
             _weights_dir = self.weights_path.parent
             _det_candidates = [
+                _stored_path,
                 _weights_dir / "phase2_best.pt",
                 _weights_dir.parent / "outputs" / "runs" / "phase2" / "weights" / "best.pt",
             ]
@@ -145,7 +148,7 @@ class ARCHONPredictor:
             if _det_path is None:
                 raise FileNotFoundError(
                     "Unified archon_best.pt found but could not locate the Phase 2 "
-                    "detection backbone (phase2_best.pt). Searched: "
+                    "detection backbone. Searched: "
                     + ", ".join(str(p) for p in _det_candidates)
                 )
             logger.info("Using Phase 2 detection backbone: '%s'", _det_path)
@@ -157,11 +160,16 @@ class ARCHONPredictor:
         # Prefer attr_heads_state embedded in the merged checkpoint; fall back to
         # searching for a standalone attr_best.pt alongside the weights file.
         if _merged_ckpt is not None and _merged_ckpt.get("attr_heads_state"):
-            # Write a temporary attr checkpoint so _load_attr_heads can consume it
+            # Write a temporary attr checkpoint so _load_attr_heads can consume it.
+            # Use the real attr_loss stored in the merged checkpoint so the
+            # training-sanity check in _load_attr_heads reports correct values.
             import tempfile, os
             _tmp_attr = Path(tempfile.mktemp(suffix="_attr_best.pt"))
             torch.save(
-                {"attr_heads_state": _merged_ckpt["attr_heads_state"], "loss": 0.0},
+                {
+                    "attr_heads_state": _merged_ckpt["attr_heads_state"],
+                    "loss": _merged_ckpt.get("attr_loss", float("inf")),
+                },
                 _tmp_attr,
             )
             try:
