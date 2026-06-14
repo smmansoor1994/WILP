@@ -810,7 +810,7 @@ class ARCHONHybridTrainer(ARCHONTrainer):
 
         optimizer = AdamW(hybrid_trainable, lr=5e-4, weight_decay=1e-4)
         scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
-        scaler = torch.cuda.amp.GradScaler(enabled=(device != "cpu"))
+        scaler = torch.amp.GradScaler("cuda", enabled=(device != "cpu"))
 
         # Loss functions
         _pw_cfg = self.train_cfg.get("attr_pos_weight", None)
@@ -844,7 +844,7 @@ class ARCHONHybridTrainer(ARCHONTrainer):
             for batch_idx, (batch_imgs, batch_labels) in enumerate(loader):
                 batch_imgs = batch_imgs.to(device)
 
-                with torch.cuda.amp.autocast(enabled=(device != "cpu")):
+                with torch.amp.autocast("cuda", enabled=(device != "cpu")):
                     # Run frozen backbone to populate FPN hooks
                     model._fpn_features = []
                     with torch.no_grad():
@@ -995,7 +995,7 @@ class ARCHONHybridTrainer(ARCHONTrainer):
         logger.info("Merging all phases into: %s", final_path)
 
         # Load Phase 2 backbone checkpoint (ultralytics format)
-        backbone_ckpt = torch.load(base_weights, map_location="cpu")
+        backbone_ckpt = torch.load(base_weights, map_location="cpu", weights_only=False)
         # Ultralytics .pt files store the model state under various keys
         backbone_state = (
             backbone_ckpt.get("model")
@@ -1018,7 +1018,7 @@ class ARCHONHybridTrainer(ARCHONTrainer):
         # Merge Phase 2b attribute heads
         attr_path = self.project_root / "weights" / "attr_best.pt"
         if attr_path.exists():
-            attr_ckpt = torch.load(attr_path, map_location="cpu")
+            attr_ckpt = torch.load(attr_path, map_location="cpu", weights_only=False)
             merged["attr_heads_state"] = attr_ckpt.get("attr_heads_state")
             merged["phases"].append("phase2b_attr")
             logger.info("  + attr heads from '%s'", attr_path)
@@ -1027,7 +1027,7 @@ class ARCHONHybridTrainer(ARCHONTrainer):
 
         # Merge Phase 3 hybrid components
         if hybrid_path.exists():
-            hybrid_ckpt = torch.load(hybrid_path, map_location="cpu")
+            hybrid_ckpt = torch.load(hybrid_path, map_location="cpu", weights_only=False)
             merged["global_encoder_state"] = hybrid_ckpt.get("global_encoder_state")
             merged["fusion_state"]         = hybrid_ckpt.get("fusion_state")
             merged["hybrid_head_state"]    = hybrid_ckpt.get("hybrid_head_state")
