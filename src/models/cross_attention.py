@@ -265,9 +265,7 @@ class MultiScaleFusion(nn.Module):
             fused_features: [P3_fused, P4_fused, P5_fused]
         """
         fused = []
-        for i, (feat, fusion, ctx_proj) in enumerate(
-            zip(fpn_features, self.fusions, self.ctx_projections)
-        ):
+        for i, (feat, fusion) in enumerate(zip(fpn_features, self.fusions)):
             H_f, W_f = feat.shape[2], feat.shape[3]
 
             # Upsample/downsample global context to match this scale's spatial size
@@ -278,11 +276,10 @@ class MultiScaleFusion(nn.Module):
             else:
                 ctx_resized = global_context
 
-            # Project context channels to match this FPN scale if necessary
-            ctx_proj_out = ctx_proj(ctx_resized)  # (B, ch_i, H_f, W_f)
-
-            # Cross-attention fusion
-            fused_feat = fusion(feat, ctx_proj_out)
+            # Cross-attention fusion: CrossAttentionFusion handles the channel
+            # mismatch internally via k_proj/v_proj (ctx_channels → cnn_channels),
+            # so pass ctx_resized directly at the original Swin channel width.
+            fused_feat = fusion(feat, ctx_resized)
             fused.append(fused_feat)
 
         return fused
