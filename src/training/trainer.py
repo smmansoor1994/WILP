@@ -927,10 +927,10 @@ class ARCHONHybridTrainer(ARCHONTrainer):
                 quad_tgt = torch.cat(all_quad_targets, dim=0).to(device)
                 dt = torch.cat(all_dtypes, dim=0).to(device)
 
-                    loss_attr = attr_loss_fn(pred_attr, tgt_attr, dt)
-                    loss_sev = severity_loss_fn(pred_sev, tgt_attr, dt)
-                    loss_quad = quadrant_loss_fn(pred_quad, quad_tgt)
-                    loss = (loss_attr + loss_sev + loss_quad) / accum_steps
+                loss_attr = attr_loss_fn(pred_attr, tgt_attr, dt)
+                loss_sev = severity_loss_fn(pred_sev, tgt_attr, dt)
+                loss_quad = quadrant_loss_fn(pred_quad, quad_tgt)
+                loss = (loss_attr + loss_sev + loss_quad) / accum_steps
 
                 scaler.scale(loss).backward()
                 accum_loss += loss.detach()
