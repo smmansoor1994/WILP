@@ -185,12 +185,12 @@ class CrossAttentionFusion(nn.Module):
 
         Q, K, V = split_heads(Q), split_heads(K), split_heads(V)
 
-        # Scaled dot-product attention
-        attn = (Q @ K.transpose(-2, -1)) * self.scale  # (B, heads, N, N)
-        attn = F.softmax(attn, dim=-1)
-        attn = self.attn_drop(attn)
+        # Memory-efficient scaled dot-product attention (Flash Attention when available).
+        # Avoids materialising the O(N²) attention matrix — critical at P3 scale
+        # where N = H×W can reach 12,800 tokens at 1280-px input.
+        dropout_p = self.attn_drop.p if self.training else 0.0
+        out = F.scaled_dot_product_attention(Q, K, V, dropout_p=dropout_p)  # (B, heads, N, head_dim)
 
-        out = attn @ V  # (B, heads, N, head_dim)
         out = out.transpose(1, 2).reshape(B, N, C)  # (B, N, C_cnn)
         out = self.out_proj(out)
         out = self.out_drop(out)

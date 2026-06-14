@@ -724,6 +724,7 @@ class ARCHONHybridTrainer(ARCHONTrainer):
 
     def _train_hybrid_heads(self, base_weights: str) -> None:
         """Train hybrid components with frozen YOLOv8 backbone."""
+        import gc
         import os
         import torch
         from torch.optim import AdamW
@@ -739,6 +740,18 @@ class ARCHONHybridTrainer(ARCHONTrainer):
             self.train_cfg.get("phase2b_epochs", 50)
         ))
         logger.info("Hybrid training: %d epochs on %s", epochs, device)
+
+        # Free memory left over from Phase 1/2 ultralytics training before
+        # building the large ARCHONModel (Swin + CrossAttn + HybridHead).
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        logger.info(
+            "GPU memory before hybrid build: %.1f / %.1f GiB allocated/reserved",
+            torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0,
+            torch.cuda.memory_reserved() / 1e9 if torch.cuda.is_available() else 0,
+        )
 
         # Build hybrid model
         model = build_archon_model(
@@ -783,9 +796,13 @@ class ARCHONHybridTrainer(ARCHONTrainer):
                       self.train_cfg.get("input_width", 1280)),
         )
         max_workers = min(self.train_cfg.get("workers", 4), os.cpu_count() or 2, 4)
+        # Batch size 1 for hybrid training: cross-attention at P3 scale (12800 tokens)
+        # is memory-heavy even with Flash Attention; gradient accumulation compensates.
+        hybrid_batch_size = 1
+        accum_steps = max(1, self.train_cfg.get("batch_size", 4) // hybrid_batch_size)
         loader = torch.utils.data.DataLoader(
             dataset,
-            batch_size=max(1, self.train_cfg.get("batch_size", 8) // 2),  # half batch for memory
+            batch_size=hybrid_batch_size,
             shuffle=True,
             num_workers=max_workers,
             collate_fn=ARCHONDataset.collate_fn,
@@ -793,6 +810,7 @@ class ARCHONHybridTrainer(ARCHONTrainer):
 
         optimizer = AdamW(hybrid_trainable, lr=5e-4, weight_decay=1e-4)
         scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+        scaler = torch.cuda.amp.GradScaler(enabled=(device != "cpu"))
 
         # Loss functions
         _pw_cfg = self.train_cfg.get("attr_pos_weight", None)
@@ -820,32 +838,34 @@ class ARCHONHybridTrainer(ARCHONTrainer):
         for epoch in range(epochs):
             epoch_loss = 0.0
             n_batches = 0
+            accum_loss = torch.tensor(0.0, device=device)
+            optimizer.zero_grad()
 
-            for batch_imgs, batch_labels in loader:
+            for batch_idx, (batch_imgs, batch_labels) in enumerate(loader):
                 batch_imgs = batch_imgs.to(device)
-                optimizer.zero_grad()
 
-                # Run frozen backbone to populate FPN hooks
-                model._fpn_features = []
-                with torch.no_grad():
-                    model.base_model.model(batch_imgs)
+                with torch.cuda.amp.autocast(enabled=(device != "cpu")):
+                    # Run frozen backbone to populate FPN hooks
+                    model._fpn_features = []
+                    with torch.no_grad():
+                        model.base_model.model(batch_imgs)
 
-                fpn_raw = [f.detach() for f in model._fpn_features[:3] if f is not None]
-                if len(fpn_raw) < 3:
-                    continue
+                    fpn_raw = [f.detach() for f in model._fpn_features[:3] if f is not None]
+                    if len(fpn_raw) < 3:
+                        continue
 
-                # Swin global context (trainable)
-                p5 = fpn_raw[2]
-                global_ctx = model.global_encoder(p5)
+                    # Swin global context (trainable)
+                    p5 = fpn_raw[2]
+                    global_ctx = model.global_encoder(p5)
 
-                # Cross-attention fusion (trainable)
-                fpn_fused = model.fusion(fpn_raw, global_ctx)
+                    # Cross-attention fusion (trainable)
+                    fpn_fused = model.fusion(fpn_raw, global_ctx)
 
-                # Hybrid head outputs (trainable)
-                hybrid_out = model.hybrid_head(fpn_fused)
-                # Also run legacy binary attr heads (frozen, for compat)
-                with torch.no_grad():
-                    attr_outputs = model.attr_heads(fpn_fused)
+                    # Hybrid head outputs (trainable)
+                    hybrid_out = model.hybrid_head(fpn_fused)
+                    # Also run legacy binary attr heads (frozen, for compat)
+                    with torch.no_grad():
+                        attr_outputs = model.attr_heads(fpn_fused)
 
                 # ── Per-tooth supervision ──────────────────────────────────────
                 all_attr_preds, all_sev_preds = [], []
@@ -907,17 +927,23 @@ class ARCHONHybridTrainer(ARCHONTrainer):
                 quad_tgt = torch.cat(all_quad_targets, dim=0).to(device)
                 dt = torch.cat(all_dtypes, dim=0).to(device)
 
-                loss_attr = attr_loss_fn(pred_attr, tgt_attr, dt)
-                loss_sev = severity_loss_fn(pred_sev, tgt_attr, dt)
-                loss_quad = quadrant_loss_fn(pred_quad, quad_tgt)
-                loss = loss_attr + loss_sev + loss_quad
+                    loss_attr = attr_loss_fn(pred_attr, tgt_attr, dt)
+                    loss_sev = severity_loss_fn(pred_sev, tgt_attr, dt)
+                    loss_quad = quadrant_loss_fn(pred_quad, quad_tgt)
+                    loss = (loss_attr + loss_sev + loss_quad) / accum_steps
 
-                loss.backward()
-                optimizer.step()
-                optimizer_stepped = True
+                scaler.scale(loss).backward()
+                accum_loss += loss.detach()
 
-                epoch_loss += loss.item()
-                n_batches += 1
+                # Gradient accumulation step
+                if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(loader):
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+                    optimizer_stepped = True
+                    epoch_loss += accum_loss.item()
+                    accum_loss = torch.tensor(0.0, device=device)
+                    n_batches += 1
 
             if optimizer_stepped:
                 scheduler.step()
