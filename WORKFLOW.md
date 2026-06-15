@@ -515,10 +515,16 @@ Dentex metrics:
 ## 10. Mode: `predict`
 
 ```bash
+# weights inside project (auto-detected)
 python main.py --mode predict \
     --input data/processed/images/test/ \
-    --weights weights/archon_best.pt \
-    --conf 0.25
+    --conf 0.15
+
+# weights in an external folder
+python main.py --mode predict \
+    --input data/processed/images/test/ \
+    --weights "D:\path\to\external\weights\archon_best.pt" \
+    --conf 0.15
 ```
 
 ### Call Chain (Baseline predictor)

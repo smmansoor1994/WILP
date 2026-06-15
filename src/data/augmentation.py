@@ -146,12 +146,14 @@ class ARCHONAugmentor:
 
         # Check if image is actually grayscale stored as BGR (all channels equal)
         if image.shape[2] == 3:
-            # Convert to LAB, apply CLAHE on L channel, convert back
-            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+            # Dataset converts BGR→RGB before augmentation, so use RGB→LAB here.
+            # Using COLOR_BGR2LAB on an RGB image swaps R and B in the conversion,
+            # producing a wrong L channel and subtle training/inference mismatch.
+            lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
             l_ch, a_ch, b_ch = cv2.split(lab)
             l_eq = self._clahe.apply(l_ch)
             lab_eq = cv2.merge([l_eq, a_ch, b_ch])
-            return cv2.cvtColor(lab_eq, cv2.COLOR_LAB2BGR)
+            return cv2.cvtColor(lab_eq, cv2.COLOR_LAB2RGB)
 
         return image
 

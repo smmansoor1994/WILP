@@ -2,13 +2,19 @@
 verify_local_image.py
 ======================
 Run inference on a local panoramic dental X-ray image using the trained
-ARCHON model (phase2/best.pt or archon_best.pt) and display results.
+ARCHON model and display results.
 
-Usage:
+Usage (single unified weights file):
     python verify_local_image.py --image path/to/xray.jpg
-    python verify_local_image.py --image path/to/xray.jpg --weights path/to/best.pt
+    python verify_local_image.py --image path/to/xray.jpg --weights path/to/archon_best.pt
     python verify_local_image.py --image path/to/xray.jpg --show
     python verify_local_image.py --image path/to/xray.jpg --save-dir C:/Users/You/Downloads
+
+    archon_best.pt is a single unified checkpoint that contains ALL phases:
+      - Phase 1+2  detection backbone
+      - Phase 2b   disease attribute heads
+      - Phase 3    Swin encoder + cross-attention + severity head
+    No --attr-weights or --hybrid-weights flags are needed when using archon_best.pt.
 
 Save outputs:
     By default, results are saved to outputs/predictions/.
@@ -16,7 +22,7 @@ Save outputs:
     Use --no-save to skip saving entirely.
 
 Default weight search order:
-  1. weights/archon_best.pt        (final trained weights)
+  1. weights/archon_best.pt        (final trained weights, all phases merged)
   2. outputs/runs/phase2/weights/best.pt
   3. outputs/runs/phase1/weights/best.pt
 """
@@ -40,6 +46,9 @@ logger = logging.getLogger("verify_local_image")
 
 
 # ── Weight search ─────────────────────────────────────────────────────────────
+# If your weights live outside the project folder, set the env variable:
+#   $env:ARCHON_WEIGHTS = "D:\path\to\your\weights\archon_best.pt"
+# or just pass --weights <path> on the command line.
 CANDIDATE_WEIGHTS = [
     WILP_DIR / "weights" / "archon_best.pt",
     WILP_DIR / "outputs" / "runs" / "phase2" / "weights" / "best.pt",
@@ -48,20 +57,37 @@ CANDIDATE_WEIGHTS = [
 
 
 def find_weights(override: str = None) -> Path:
+    # 1. Explicit --weights argument
     if override:
         p = Path(override)
         if not p.exists():
             logger.error("Specified weights not found: %s", p)
             sys.exit(1)
         return p
+
+    # 2. ARCHON_WEIGHTS environment variable
+    import os
+    env_weights = os.environ.get("ARCHON_WEIGHTS")
+    if env_weights:
+        p = Path(env_weights)
+        if p.exists():
+            logger.info("Using weights from ARCHON_WEIGHTS env var: %s", p)
+            return p
+        logger.warning("ARCHON_WEIGHTS env var set but file not found: %s", p)
+
+    # 3. Standard search candidates (relative to project root)
     for candidate in CANDIDATE_WEIGHTS:
         if candidate.exists():
             return candidate
+
     logger.error(
         "No model weights found. Searched:\n%s\n"
-        "Download the trained weights from Colab or run training first.\n"
-        "Pass --weights <path> to specify a custom location.",
+        "Options:\n"
+        "  1. Pass --weights <path/to/archon_best.pt>\n"
+        "  2. Set env var: $env:ARCHON_WEIGHTS = '<path>'\n"
+        "  3. Copy archon_best.pt into %s\\weights\\",
         "\n".join(f"  {c}" for c in CANDIDATE_WEIGHTS),
+        WILP_DIR,
     )
     sys.exit(1)
 
@@ -77,12 +103,14 @@ def main():
     )
     parser.add_argument(
         "--weights", default=None,
-        help="Path to model weights (.pt). Auto-detected if omitted."
+        help="Path to model weights (.pt). Auto-detected if omitted. "
+             "Use the unified archon_best.pt (contains all phases)."
     )
     parser.add_argument(
         "--attr-weights", default=None,
-        help="Path to attribute head weights (attr_best.pt). "
-             "Auto-searched in weights directory and its parent if omitted."
+        help="[DEPRECATED] Separate attr_best.pt path. "
+             "Ignored when --weights points to the unified archon_best.pt, "
+             "which already embeds the attribute heads."
     )
     parser.add_argument(
         "--conf", type=float, default=0.10,
@@ -131,12 +159,18 @@ def main():
     )
     parser.add_argument(
         "--hybrid-weights", default=None,
-        help="Path to hybrid_best.pt for severity grading. "
-             "Auto-searched next to --weights if omitted."
+        help="[DEPRECATED] Separate hybrid_best.pt path. "
+             "Ignored when --weights points to the unified archon_best.pt, "
+             "which already embeds the Swin encoder and severity head."
     )
     parser.add_argument(
         "--severity-threshold", type=float, default=0.4,
         help="Min softmax probability for non-Healthy severity to be reported (default: 0.4)."
+    )
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="Print raw YOLO detections (before linear sum assignment) to diagnose "
+             "missed teeth and wrong-quadrant assignments."
     )
     args = parser.parse_args()
 
@@ -175,6 +209,37 @@ def main():
 
     save = not args.no_save
     logger.info("Attr threshold : %.2f  mode=%s", args.attr_threshold, args.attr_mode)
+
+    # ── Debug: raw YOLO detections before postprocessing ─────────────────────
+    if args.debug:
+        import torch
+        from src.utils.fdi import class_to_fdi, fdi_to_name
+        predictor._load_models()
+        raw_results = predictor._det_model.predict(
+            source=str(img_path),
+            conf=args.conf,
+            iou=args.iou,
+            max_det=32,
+            imgsz=[640, 1280],
+            verbose=False,
+            device=args.device,
+        )
+        if raw_results and raw_results[0].boxes is not None:
+            boxes = raw_results[0].boxes
+            cls_ids = boxes.cls.cpu().numpy().astype(int)
+            confs = boxes.conf.cpu().numpy()
+            print(f"\n{'='*60}")
+            print(f"RAW YOLO detections (before linear-sum-assignment): {len(cls_ids)} boxes")
+            print(f"{'='*60}")
+            for rank, (cls_id, conf) in enumerate(
+                sorted(zip(cls_ids, confs), key=lambda x: -x[1])
+            ):
+                fdi = class_to_fdi(cls_id)
+                name = fdi_to_name(fdi)
+                print(f"  #{rank+1:>2}  class={cls_id:>2}  FDI {fdi:>2}  ({name:<35})  conf={conf:.3f}")
+        else:
+            print("  No raw detections above threshold.")
+        print()
 
     results = predictor.predict(
         input_path=str(img_path),

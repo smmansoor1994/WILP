@@ -679,38 +679,78 @@ class ARCHONHybridPredictor(ARCHONPredictor):
             self._load_hybrid_components()
 
     def _load_hybrid_components(self) -> None:
-        """Load Swin encoder, cross-attention, and hybrid head from checkpoint."""
+        """Load Swin encoder, cross-attention, and hybrid head.
+
+        Resolution order:
+          1. If the main weights_path is our unified archon_best.pt (contains
+             'global_encoder_state' key), load hybrid states directly from it.
+             No separate --hybrid-weights file needed.
+          2. Explicit --hybrid-weights path (self._hybrid_weights_path).
+          3. Auto-search for hybrid_best.pt alongside the weights file.
+        """
         self._hybrid_loaded = True  # set eagerly to avoid retry loops
 
-        candidates = [
-            self.weights_path.parent / "hybrid_best.pt",
-            self.weights_path.parent.parent / "hybrid_best.pt",
-            Path("weights") / "hybrid_best.pt",
-        ]
-        if self._hybrid_weights_path:
-            candidates.insert(0, Path(self._hybrid_weights_path))
+        # ── Priority 1: states embedded in the unified archon_best.pt ─────────
+        ckpt = None
+        try:
+            probe = torch.load(str(self.weights_path), map_location="cpu", weights_only=False)
+            if isinstance(probe, dict) and probe.get("global_encoder_state"):
+                ckpt = probe
+                logger.info("Loading hybrid components from unified archon_best.pt")
+        except Exception:
+            pass
 
-        hybrid_path = next((p for p in candidates if p.exists()), None)
-        if hybrid_path is None:
-            logger.info(
-                "hybrid_best.pt not found — hybrid improvements disabled. "
-                "Run --mode train_hybrid to generate it."
-            )
-            return
+        # ── Priority 2 & 3: standalone hybrid_best.pt ─────────────────────────
+        if ckpt is None:
+            candidates = []
+            if self._hybrid_weights_path:
+                candidates.append(Path(self._hybrid_weights_path))
+            candidates += [
+                self.weights_path.parent / "hybrid_best.pt",
+                self.weights_path.parent.parent / "hybrid_best.pt",
+                Path("weights") / "hybrid_best.pt",
+            ]
+            hybrid_path = next((p for p in candidates if p.exists()), None)
+            if hybrid_path is None:
+                logger.info(
+                    "hybrid_best.pt not found — hybrid improvements disabled. "
+                    "Run --mode train_hybrid to generate it."
+                )
+                return
+            try:
+                ckpt = torch.load(str(hybrid_path), map_location=self.device, weights_only=False)
+                logger.info(
+                    "Hybrid components loaded from '%s' (epoch %s, loss %.4f).",
+                    hybrid_path,
+                    ckpt.get("epoch", "?"),
+                    ckpt.get("loss", float("nan")),
+                )
+            except Exception as e:
+                logger.warning("Could not load hybrid_best.pt: %s", e)
+                return
 
         try:
             from src.models.swin_transformer import GlobalContextEncoder
             from src.models.cross_attention import MultiScaleFusion
             from src.models.hybrid_head import HybridMultiTaskHead
 
-            ckpt = torch.load(str(hybrid_path), map_location=self.device)
             fpn_channels = [320, 640, 640]
             p5_ch = fpn_channels[-1]
 
             self._global_encoder = GlobalContextEncoder(in_channels=p5_ch)
-            self._global_encoder.load_state_dict(
+            # Pre-build Swin blocks at the training resolution BEFORE load_state_dict.
+            # GlobalContextEncoder lazily initialises _blocks=None; if we call
+            # load_state_dict before building them, all _blocks.*.weight keys are
+            # missing from the module tree and strict=False silently drops them →
+            # the trained Swin weights are never restored (always random at inference).
+            # Stored as p5_train_hw in the checkpoint; fall back to standard (20, 40).
+            p5_hw = ckpt.get("p5_train_hw", (20, 40))
+            self._global_encoder._build_blocks(*p5_hw)
+            missing, unexpected = self._global_encoder.load_state_dict(
                 ckpt.get("global_encoder_state", {}), strict=False
             )
+            if missing:
+                logger.warning("GlobalContextEncoder: %d missing keys after load", len(missing))
             self._global_encoder.to(self.device).eval()
 
             self._fusion = MultiScaleFusion(fpn_channels=fpn_channels, ctx_channels=p5_ch)
@@ -726,8 +766,7 @@ class ARCHONHybridPredictor(ARCHONPredictor):
             self._hybrid_head.to(self.device).eval()
 
             logger.info(
-                "Hybrid components loaded from '%s' (epoch %s, loss %.4f).",
-                hybrid_path,
+                "Hybrid components ready (epoch %s, loss %.4f).",
                 ckpt.get("epoch", "?"),
                 ckpt.get("loss", float("nan")),
             )

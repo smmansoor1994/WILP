@@ -88,6 +88,7 @@ class ToothDetection:
             "has_deepcaries": self.has_deepcaries,
             "has_lesion": self.has_lesion,
             "diseases": self.diseases,
+            "severity": self.severity_details,
         }
 
 
@@ -159,16 +160,28 @@ def apply_linear_sum_assignment(
     # When quadrant_probs are provided by the hybrid quadrant head:
     # For each FDI slot i (belongs to quadrant q_i = i // 8) and each detection j,
     # add a penalty proportional to the probability that detection j is NOT in q_i.
-    #   penalty[i, j] = alpha * (1 - quadrant_probs[j, q_i])
-    # This lowers the cost of same-quadrant assignments and raises cross-quadrant costs.
+    #   penalty[i, j] = alpha_j * (1 - quadrant_probs[j, q_i])
+    # alpha_j is confidence-gated: scale by max quadrant prob per detection.
+    # When the quadrant head is uncertain (max_prob ~ 0.25 for 4 classes),
+    # alpha_j → 0 so the penalty has no effect on the cost matrix.
+    # This prevents wrong quadrant assignments for midline teeth where Q3/Q4 overlap.
     if quadrant_probs is not None:
         valid_quad = quadrant_probs[valid_idx]  # (M, 4)  softmax over quadrants 0-3
-        ALPHA = 0.5  # penalty weight — keeps FDI class probs dominant
+        MAX_ALPHA = 0.5  # ceiling penalty weight
+        RANDOM_PROB = 0.25  # expected max prob for a 4-class uniform distribution
+        # Scale alpha per detection: 0 when uncertain, MAX_ALPHA when fully confident
+        max_quad_prob = valid_quad.max(axis=1)  # (M,)  max class prob per detection
+        # Normalise: 0 at uniform (0.25), 1 at certain (1.0)
+        confidence_scale = np.clip(
+            (max_quad_prob - RANDOM_PROB) / (1.0 - RANDOM_PROB), 0.0, 1.0
+        )  # (M,)
+        per_det_alpha = MAX_ALPHA * confidence_scale  # (M,)
         # slot_quadrants[i] = quadrant index for FDI slot i (0-3)
         slot_quadrants = np.arange(NUM_CLASSES) // 8  # (32,)
         # quad_match_prob[i, j] = valid_quad[j, slot_quadrants[i]]
         quad_match_prob = valid_quad[:, slot_quadrants].T  # (32, M)
-        quad_penalty = ALPHA * (1.0 - quad_match_prob)     # (32, M)
+        # Apply per-detection confidence-scaled alpha
+        quad_penalty = per_det_alpha[np.newaxis, :] * (1.0 - quad_match_prob)  # (32, M)
         cost_matrix = cost_matrix + quad_penalty
 
     # ── Solve the assignment ──────────────────────────────────────────────────

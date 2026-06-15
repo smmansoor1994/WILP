@@ -74,6 +74,9 @@ class ARCHONTrainer:
         self.save_dir = (self.project_root / save_dir_rel).resolve()
         self.save_dir.mkdir(parents=True, exist_ok=True)
 
+        # Cached pos_weight (computed once, reused across Phase 2b and Phase 3)
+        self._cached_pos_weight: Optional[List[float]] = None
+
     def train(self) -> None:
         """Run the full two-phase training pipeline."""
 
@@ -317,31 +320,35 @@ class ARCHONTrainer:
             labels_dir=labels_ext_dir,
             img_size=(self.train_cfg.get("input_height", 640),
                       self.train_cfg.get("input_width", 1280)),
+            augment=True,  # augmentation improves attribute head generalisation
         )
         # Cap workers to avoid Colab/low-CPU warnings (system may only support 2)
         import os
         max_workers = min(self.train_cfg.get("workers", 4), os.cpu_count() or 2, 4)
+        pin = (self.device != "cpu")
         loader = torch.utils.data.DataLoader(
             dataset,
             batch_size=self.train_cfg.get("batch_size", 8),
             shuffle=True,
             num_workers=max_workers,
+            pin_memory=pin,
             collate_fn=ARCHONDataset.collate_fn,
         )
 
         optimizer = AdamW(model.attr_heads.parameters(), lr=1e-3, weight_decay=1e-4)
 
         # Compute per-attribute pos_weight from dataset to counteract class imbalance.
-        # Most teeth are healthy (label=0); without weighting, BCE drives the model to
-        # always predict 0 (trivial solution, best_loss → 0).  pos_weight = neg/pos
-        # ensures each positive (diseased) sample receives proportionally more gradient.
-        # Use config override if provided, else compute from data.
+        # Cache on self to avoid re-scanning all label files in Phase 3.
         _pw_cfg = self.train_cfg.get("attr_pos_weight", None)
         if _pw_cfg and len(_pw_cfg) == 4:
             pos_weight = [float(v) for v in _pw_cfg]
             logger.info("attr pos_weight from config: %s", pos_weight)
+        elif self._cached_pos_weight is not None:
+            pos_weight = self._cached_pos_weight
+            logger.info("attr pos_weight from cache: %s", pos_weight)
         else:
             pos_weight = _compute_attr_pos_weight(dataset)
+            self._cached_pos_weight = pos_weight
             logger.info("attr pos_weight computed from dataset: %s", pos_weight)
 
         attr_loss_fn = AttributeBCELoss(num_attrs=4, loss_weight=8.0, pos_weight=pos_weight)
@@ -792,8 +799,10 @@ class ARCHONHybridTrainer(ARCHONTrainer):
             labels_dir=labels_ext_dir,
             img_size=(self.train_cfg.get("input_height", 640),
                       self.train_cfg.get("input_width", 1280)),
+            augment=True,  # augmentation improves generalisation of hybrid heads
         )
         max_workers = min(self.train_cfg.get("workers", 4), os.cpu_count() or 2, 4)
+        pin = (device != "cpu")
         # Batch size 1 for hybrid training: cross-attention at P3 scale (12800 tokens)
         # is memory-heavy even with Flash Attention; gradient accumulation compensates.
         hybrid_batch_size = 1
@@ -803,6 +812,7 @@ class ARCHONHybridTrainer(ARCHONTrainer):
             batch_size=hybrid_batch_size,
             shuffle=True,
             num_workers=max_workers,
+            pin_memory=pin,
             collate_fn=ARCHONDataset.collate_fn,
         )
 
@@ -812,12 +822,15 @@ class ARCHONHybridTrainer(ARCHONTrainer):
 
         # Loss functions
         _pw_cfg = self.train_cfg.get("attr_pos_weight", None)
-        pos_weight = [float(v) for v in _pw_cfg] if _pw_cfg and len(_pw_cfg) == 4 \
-                     else _compute_attr_pos_weight(dataset)
-        attr_loss_fn = AttributeBCELoss(num_attrs=4, loss_weight=4.0, pos_weight=pos_weight)
+        if _pw_cfg and len(_pw_cfg) == 4:
+            pos_weight = [float(v) for v in _pw_cfg]
+        elif self._cached_pos_weight is not None:
+            pos_weight = self._cached_pos_weight  # reuse Phase 2b scan result
+        else:
+            pos_weight = _compute_attr_pos_weight(dataset)
+            self._cached_pos_weight = pos_weight
         severity_loss_fn = SeverityLoss(num_attrs=4, num_severity_levels=3, loss_weight=4.0)
         quadrant_loss_fn = QuadrantAuxLoss(loss_weight=1.0)
-        attr_loss_fn.to(device)
         severity_loss_fn.to(device)
 
         # Freeze backbone in eval mode (BN uses running stats, not batch stats)
@@ -836,7 +849,7 @@ class ARCHONHybridTrainer(ARCHONTrainer):
         for epoch in range(epochs):
             epoch_loss = 0.0
             n_batches = 0
-            accum_loss = torch.tensor(0.0, device=device)
+            accum_loss = 0.0  # Python float — no unnecessary tensor allocation
             optimizer.zero_grad()
 
             for batch_idx, (batch_imgs, batch_labels) in enumerate(loader):
@@ -861,12 +874,9 @@ class ARCHONHybridTrainer(ARCHONTrainer):
 
                     # Hybrid head outputs (trainable)
                     hybrid_out = model.hybrid_head(fpn_fused)
-                    # Also run legacy binary attr heads (frozen, for compat)
-                    with torch.no_grad():
-                        attr_outputs = model.attr_heads(fpn_fused)
 
                 # ── Per-tooth supervision ──────────────────────────────────────
-                all_attr_preds, all_sev_preds = [], []
+                all_sev_preds = []
                 all_quad_preds, all_quad_targets = [], []
                 all_targets, all_dtypes = [], []
 
@@ -882,13 +892,11 @@ class ARCHONHybridTrainer(ARCHONTrainer):
 
                     # Sample severity logits at each tooth center across all scales
                     sev_scale_samples = []
-                    attr_scale_samples = []
                     quad_scale_samples = []
 
-                    for s_idx, (sev_feat, quad_feat, attr_feat) in enumerate(zip(
+                    for s_idx, (sev_feat, quad_feat) in enumerate(zip(
                         hybrid_out["severity"],
                         hybrid_out["quadrant"],
-                        attr_outputs,
                     )):
                         _, C_sev, H_f, W_f = sev_feat.shape
                         xf = (cx * W_f).long().clamp(0, W_f - 1)
@@ -898,19 +906,15 @@ class ARCHONHybridTrainer(ARCHONTrainer):
                         sev_scale_samples.append(sev_feat[img_idx, :, yf, xf].T)
                         # Quadrant: (4, N_teeth) → (N_teeth, 4)
                         quad_scale_samples.append(quad_feat[img_idx, :, yf, xf].T)
-                        # Attr: (4, N_teeth) → (N_teeth, 4)
-                        attr_scale_samples.append(attr_feat[img_idx, :, yf, xf].T)
 
                     if not sev_scale_samples:
                         continue
 
                     tooth_sev = torch.stack(sev_scale_samples, dim=0).mean(dim=0)    # (N, 12)
                     tooth_quad = torch.stack(quad_scale_samples, dim=0).mean(dim=0)  # (N, 4)
-                    tooth_attr = torch.stack(attr_scale_samples, dim=0).mean(dim=0)  # (N, 4)
 
                     all_sev_preds.append(tooth_sev)
                     all_quad_preds.append(tooth_quad)
-                    all_attr_preds.append(tooth_attr)
                     all_quad_targets.append(cls_ids)
                     all_targets.append(attrs)
                     all_dtypes.append(data_types)
@@ -920,18 +924,19 @@ class ARCHONHybridTrainer(ARCHONTrainer):
 
                 pred_sev = torch.cat(all_sev_preds, dim=0)
                 pred_quad = torch.cat(all_quad_preds, dim=0)
-                pred_attr = torch.cat(all_attr_preds, dim=0)
                 tgt_attr = torch.cat(all_targets, dim=0).to(device)
                 quad_tgt = torch.cat(all_quad_targets, dim=0).to(device)
                 dt = torch.cat(all_dtypes, dim=0).to(device)
 
-                loss_attr = attr_loss_fn(pred_attr, tgt_attr, dt)
+                # loss_attr (from frozen binary heads) has NO gradient — removing it
+                # from the total keeps best_loss purely severity+quadrant, giving
+                # correct checkpoint selection. It's logged separately for diagnostics.
                 loss_sev = severity_loss_fn(pred_sev, tgt_attr, dt)
                 loss_quad = quadrant_loss_fn(pred_quad, quad_tgt)
-                loss = (loss_attr + loss_sev + loss_quad) / accum_steps
+                loss = (loss_sev + loss_quad) / accum_steps
 
                 scaler.scale(loss).backward()
-                accum_loss += loss.detach()
+                accum_loss += loss.item()
 
                 # Gradient accumulation step
                 if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(loader):
@@ -939,8 +944,8 @@ class ARCHONHybridTrainer(ARCHONTrainer):
                     scaler.update()
                     optimizer.zero_grad()
                     optimizer_stepped = True
-                    epoch_loss += accum_loss.item()
-                    accum_loss = torch.tensor(0.0, device=device)
+                    epoch_loss += accum_loss
+                    accum_loss = 0.0
                     n_batches += 1
 
             if optimizer_stepped:
@@ -953,12 +958,22 @@ class ARCHONHybridTrainer(ARCHONTrainer):
 
             if avg_loss < best_loss:
                 best_loss = avg_loss
+                # Capture the P5 spatial resolution used during training so that
+                # _load_hybrid_components can pre-build Swin blocks before calling
+                # load_state_dict — otherwise _blocks=None and all block weights
+                # are silently dropped by strict=False (critical bug).
+                p5_hw = None
+                try:
+                    p5_hw = tuple(model.global_encoder._last_resolution or (20, 40))
+                except Exception:
+                    p5_hw = (20, 40)
                 ckpt = {
                     "epoch": epoch,
                     "global_encoder_state": model.global_encoder.state_dict(),
                     "fusion_state": model.fusion.state_dict(),
                     "hybrid_head_state": model.hybrid_head.state_dict(),
                     "loss": best_loss,
+                    "p5_train_hw": p5_hw,
                 }
                 torch.save(ckpt, best_path)
                 torch.save(ckpt, weights_hybrid_path)

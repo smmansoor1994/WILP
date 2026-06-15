@@ -238,28 +238,46 @@ python main.py --mode train --resume
 
 Use `verify_local_image.py` to run inference on any local dental X-ray and display results.
 
+`archon_best.pt` is a **single unified checkpoint** containing all phases (detection, attribute heads, severity). No separate `--attr-weights` or `--hybrid-weights` needed.
+
+### Weights location options
+
+| Method | How |
+|---|---|
+| Weights **inside project** `weights/` | Just run — auto-detected |
+| Weights in an **external folder** | Pass `--weights <path>` or set `$env:ARCHON_WEIGHTS` |
+
+```powershell
+# Option A — set env variable once per session (external weights folder)
+$env:ARCHON_WEIGHTS = "D:\WILP\Workingcode\models\archon-100-hybrid\weights_20260615_155645\content\WILP\weights\archon_best.pt"
+python verify_local_image.py --image path/to/xray.png --show
+
+# Option B — pass --weights directly each time
+python verify_local_image.py `
+  --image path/to/xray.png `
+  --weights "D:\path\to\external\weights\archon_best.pt" `
+  --show
+```
+
 ### Syntax
 ```powershell
 python verify_local_image.py `
   --image          <path to panoramic X-ray (.jpg / .png)> `
-  --weights        <path to archon_best.pt> `
-  --attr-weights   <path to attr_best.pt> `
+  --weights        <path to archon_best.pt>  `# optional if auto-detected
   --device         cpu `
-  --conf           0.25 `
-  --iou            0.45 `
+  --conf           0.15 `
   --attr-threshold 0.3 `
-  --attr-mode      per_tooth `
   --save-dir       <folder to save results> `
   --show
 ```
 
-### Example — full run with disease detection (recommended after retraining)
+### Example — full run with disease + severity (recommended after retraining)
 ```powershell
 python verify_local_image.py `
   --image "D:\WILP\sem-4\Dataset\DENTEX\DENTEX\training_data\quadrant-enumeration-disease\xrays\train_10.png" `
-  --weights "D:\WILP\Workingcode\Baseline\WILP\weights\archon_best.pt" `
-  --attr-weights "D:\WILP\Workingcode\Baseline\WILP\weights\attr_best.pt" `
+  --weights "D:\WILP\Workingcode\models\archon-100-hybrid\weights_20260615_155645\content\WILP\weights\archon_best.pt" `
   --device cuda `
+  --conf 0.15 `
   --attr-threshold 0.3 `
   --save-dir "C:\Users\Z0046KUF\Downloads\archon_results" `
   --show
@@ -269,11 +287,10 @@ python verify_local_image.py `
 > After a correct retrain you should see those 5 teeth labeled `D: Caries`.  
 > If all teeth still show `D: Healthy`, check the training log for `Phase 2b` lines with `num_attr_samples > 0`.
 
-### Example — basic run (detection only, no attr-weights)
+### Example — basic detection only (auto-detect weights)
 ```powershell
 python verify_local_image.py `
   --image "C:\Users\Z0046KUF\Downloads\pnmc.jpg" `
-  --weights "D:\WILP\Workingcode\Baseline\WILP\weights\archon_best.pt" `
   --device cpu `
   --show
 ```
@@ -282,8 +299,7 @@ python verify_local_image.py `
 ```powershell
 python verify_local_image.py `
   --image "C:\Users\Z0046KUF\Downloads\pnmc.jpg" `
-  --weights "D:\WILP\Workingcode\Baseline\WILP\weights\archon_best.pt" `
-  --attr-weights "D:\WILP\Workingcode\Baseline\WILP\weights\attr_best.pt" `
+  --weights "D:\path\to\weights\archon_best.pt" `
   --device cpu `
   --conf 0.10 `
   --attr-threshold 0.3 `
@@ -296,17 +312,17 @@ python verify_local_image.py `
 | Option | Default | Description |
 |---|---|---|
 | `--image` | *(required)* | Path to panoramic X-ray (`.jpg` / `.png`) |
-| `--weights` | auto-detected | `archon_best.pt` — detection + FDI enumeration model |
-| `--attr-weights` | auto-searched | `attr_best.pt` — disease attribute head weights |
+| `--weights` | auto-detected | Path to `archon_best.pt` (unified: detection + attributes + severity) |
 | `--device` | `cpu` | `cpu` or `cuda` (GPU) |
-| `--conf` | `0.25` | Detection confidence threshold — lower = more teeth detected |
+| `--conf` | `0.10` | Detection confidence threshold — lower = more teeth detected |
 | `--iou` | `0.45` | NMS IoU threshold |
-| `--attr-threshold` | `0.3` | Disease probability threshold — lower = more sensitive to disease; raise to `0.45` if too many false positives |
+| `--attr-threshold` | `0.3` | Disease probability threshold — lower = more sensitive; raise to `0.45` to reduce false positives |
+| `--severity-threshold` | `0.4` | Min probability for Mild/Severe severity label |
 | `--attr-mode` | `per_tooth` | `per_tooth` for retrained models; `global_avg` for pre-June-2026 weights |
 | `--save-dir` | `outputs/predictions/` | Folder to save annotated image + JSON results |
-| `--output-dir` | `outputs/predictions/` | Fallback save folder (used if `--save-dir` not set) |
 | `--show` | off | Display annotated image via matplotlib |
 | `--no-save` | off | Skip saving all output files |
+| `--debug` | off | Print raw YOLO detections before assignment (diagnosis) |
 
 ### `--attr-threshold` tuning guide
 
