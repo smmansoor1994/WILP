@@ -75,6 +75,7 @@ class ToothDetection:
     has_deepcaries: bool = False
     has_lesion: bool = False
     diseases: List[str] = field(default_factory=list)
+    severity_details: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {

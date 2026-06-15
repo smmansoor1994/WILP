@@ -200,9 +200,14 @@ def main():
                 f"deep={tooth.has_deepcaries and 1 or 0}  "
                 f"les={tooth.has_lesion and 1 or 0}]"
             )
+            severity_str = (
+                "  severity=[" + ", ".join(tooth.severity_details) + "]"
+                if getattr(tooth, "severity_details", [])
+                else ""
+            )
             print(
                 f"  FDI {tooth.fdi:>2}  ({tooth.fdi_name:<35})  "
-                f"conf={tooth.conf:.2f}  {disease_str:<25}{attr_raw}"
+                f"conf={tooth.conf:.2f}  {disease_str:<25}{attr_raw}{severity_str}"
             )
 
     # ── Show image if requested ───────────────────────────────────────────────
