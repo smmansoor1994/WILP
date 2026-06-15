@@ -129,6 +129,15 @@ def main():
         "--no-save", action="store_true",
         help="Skip saving output files entirely."
     )
+    parser.add_argument(
+        "--hybrid-weights", default=None,
+        help="Path to hybrid_best.pt for severity grading. "
+             "Auto-searched next to --weights if omitted."
+    )
+    parser.add_argument(
+        "--severity-threshold", type=float, default=0.4,
+        help="Min softmax probability for non-Healthy severity to be reported (default: 0.4)."
+    )
     args = parser.parse_args()
 
     # ── Validate image path ───────────────────────────────────────────────────
@@ -149,9 +158,9 @@ def main():
         logger.info("Save dir      : %s", effective_save_dir)
 
     # ── Run inference ─────────────────────────────────────────────────────────
-    from src.inference.predictor import ARCHONPredictor
+    from src.inference.predictor import ARCHONHybridPredictor
 
-    predictor = ARCHONPredictor(
+    predictor = ARCHONHybridPredictor(
         weights_path=str(weights_path),
         device=args.device,
         conf_threshold=args.conf,
@@ -160,6 +169,8 @@ def main():
         img_size=(640, 1280),
         attr_weights_path=args.attr_weights,
         attr_inference_mode=args.attr_mode,
+        hybrid_weights_path=args.hybrid_weights,
+        severity_threshold=args.severity_threshold,
     )
 
     save = not args.no_save

@@ -834,18 +834,29 @@ class ARCHONHybridPredictor(ARCHONPredictor):
             quadrant_probs=quad_np,
         )
 
-        # Annotate severity on each ToothDetection
-        for i, tooth in enumerate(teeth):
-            if i < len(sev_np):
-                tooth_sev = []
-                attr_names = ["is_impacted", "has_caries", "has_deepcaries", "has_lesion"]
-                for attr_i, attr_name in enumerate(attr_names):
-                    logits = sev_np[i, attr_i * 3: attr_i * 3 + 3]
-                    sev_level = int(np.argmax(logits))
-                    if sev_level > 0:
-                        tooth_sev.append(f"{attr_name}:{self.SEVERITY_LABELS[sev_level]}")
-                if hasattr(tooth, "severity_details"):
-                    tooth.severity_details = tooth_sev
+        # Annotate severity on each ToothDetection.
+        # Match each tooth back to its original YOLO detection by bbox proximity,
+        # because postprocess reorders/filters detections (teeth[i] != sev_np[i]).
+        boxes_all = result.boxes.xywhn.cpu().numpy()  # (N, 4) raw YOLO order
+        for tooth in teeth:
+            tooth_bbox = np.array(tooth.bbox_xywhn)
+            dists = np.linalg.norm(boxes_all - tooth_bbox, axis=1)
+            orig_idx = int(np.argmin(dists))
+            if orig_idx >= len(sev_np):
+                continue
+            tooth_sev = []
+            attr_names = ["is_impacted", "has_caries", "has_deepcaries", "has_lesion"]
+            attr_flags = [tooth.is_impacted, tooth.has_caries, tooth.has_deepcaries, tooth.has_lesion]
+            for attr_i, (attr_name, is_active) in enumerate(zip(attr_names, attr_flags)):
+                logits = sev_np[orig_idx, attr_i * 3: attr_i * 3 + 3]
+                sev_level = int(np.argmax(logits))
+                # If binary attr says diseased but argmax lands on Healthy (0),
+                # use the highest non-healthy class so severity stays consistent.
+                if is_active and sev_level == 0:
+                    sev_level = int(np.argmax(logits[1:])) + 1
+                if sev_level > 0:
+                    tooth_sev.append(f"{attr_name}:{self.SEVERITY_LABELS[sev_level]}")
+            tooth.severity_details = tooth_sev
 
         return teeth
 

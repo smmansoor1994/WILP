@@ -425,14 +425,24 @@ class GlobalContextEncoder(nn.Module):
         """
         B, C, H, W = p5.shape
 
-        # Build or rebuild blocks if resolution changed
-        if self._blocks is None or self._last_resolution != (H, W):
-            self._build_blocks(H, W)
+        # Pad to a multiple of window_size so window_partition never fails on
+        # non-divisible spatial dimensions (e.g. H=18 with window_size=4).
+        ws = self._window_size
+        pad_h = (ws - H % ws) % ws
+        pad_w = (ws - W % ws) % ws
+        if pad_h > 0 or pad_w > 0:
+            import torch.nn.functional as F
+            p5 = F.pad(p5, (0, pad_w, 0, pad_h))
+        _, _, H_pad, W_pad = p5.shape
+
+        # Build or rebuild blocks if padded resolution changed
+        if self._blocks is None or self._last_resolution != (H_pad, W_pad):
+            self._build_blocks(H_pad, W_pad)
             # Ensure new blocks are on the right device
             self._blocks = self._blocks.to(p5.device)
 
-        # (B, C, H, W) → (B, H*W, C) for transformer
-        x = p5.flatten(2).transpose(1, 2)  # (B, H*W, C)
+        # (B, C, H_pad, W_pad) → (B, H_pad*W_pad, C) for transformer
+        x = p5.flatten(2).transpose(1, 2)  # (B, H_pad*W_pad, C)
         x = self.patch_embed(x)
 
         for block in self._blocks:
@@ -440,6 +450,8 @@ class GlobalContextEncoder(nn.Module):
 
         x = self.proj_out(x)
 
-        # (B, H*W, C) → (B, C, H, W)
-        out = x.transpose(1, 2).reshape(B, C, H, W)
+        # (B, H_pad*W_pad, C) → (B, C, H_pad, W_pad) → crop to original (B, C, H, W)
+        out = x.transpose(1, 2).reshape(B, C, H_pad, W_pad)
+        if pad_h > 0 or pad_w > 0:
+            out = out[:, :, :H, :W]
         return out
