@@ -11,24 +11,34 @@ Dataset:  https://www.kaggle.com/competitions/dentex-challenge-2023
 Pipeline Modes:
   preprocess    → Convert COCO JSON annotations to YOLO format
   pseudo_label  → Generate pseudo-labels for healthy teeth (Part 3) and unlabelled images
-  train         → Train ARCHON (2-phase: detection + attributes)
+  train_phase1  → Train Phase 1 detection only (YOLOv8x + CoordConv)
+  train_phase2  → Train Phase 2 with attribute heads (requires Phase 1 weights)
+  train         → Train both Phase 1 and Phase 2 (full two-phase training)
+  train_attr    → Re-train attribute heads only (Phase 2b)
+  train_hybrid  → Train Phase 3 (Swin + CrossAttention + HybridMultiTaskHead)
   evaluate      → Evaluate model on validation set (mAP metrics)
   predict       → Run inference on image(s) with visualization
   full          → Run entire pipeline end-to-end (no download — dataset must be on disk)
 
 Usage Examples:
-  # ── Step-by-step ──
+  # ── Step-by-step (separate phases) ──
   python main.py --mode preprocess --dentex-root D:/path/to/DENTEX
-  python main.py --mode pseudo_label
-  python main.py --mode train
+  python main.py --mode train_phase1          # Detection only (required for pseudo labeling)
+  python main.py --mode pseudo_label          # Generate pseudo labels using Phase 1 weights
+  python main.py --mode train_phase2          # Train attributes (requires Phase 1 weights)
+  python main.py --mode train_hybrid          # Train Phase 3 (requires Phase 2 weights)
   python main.py --mode evaluate --weights weights/archon_best.pt
   python main.py --mode predict --input data/processed/images/test/sample.jpg
+
+  # ── Two-phase training (combined) ──
+  python main.py --mode train                 # Phase 1 + Phase 2 together
 
   # ── Full pipeline ──
   python main.py --mode full --dentex-root D:/path/to/DENTEX
 
   # ── Resume training ──
-  python main.py --mode train --resume
+  python main.py --mode train_phase1 --resume
+  python main.py --mode train_phase2 --resume
 
   # ── Predict on a directory ──
   python main.py --mode predict --input path/to/xrays/ --weights weights/archon_best.pt
@@ -75,11 +85,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["preprocess", "pseudo_label", "train", "train_attr",
+        choices=["preprocess", "pseudo_label", "train_phase1", "train_phase2", "train", "train_attr",
                  "train_hybrid", "evaluate", "predict", "full"],
         default="full",
         help=(
             "Pipeline stage to execute (default: full — runs all stages). "
+            "train_phase1: Train detection only (Phase 1). "
+            "train_phase2: Train with attributes (Phase 2). "
+            "train: Train both phases. "
             "train_hybrid: Phase 3 — train Swin+CrossAttn+SeverityHead on existing Phase 2 weights."
         ),
     )
@@ -289,6 +302,68 @@ def stage_train(args: argparse.Namespace) -> None:
     trainer.train()
 
 
+def stage_train_phase1(args: argparse.Namespace) -> None:
+    """Stage 4a: Train Phase 1 Detection Only.
+
+    Trains YOLOv8x + CoordConv on Parts 1+2 (detection only).
+    This phase is required before generating pseudo labels.
+
+    Output:
+      outputs/runs/phase1/weights/best.pt
+    """
+    _section_header("STAGE 4a — Train Phase 1 (Detection Only)")
+    logger.info("Config: %s", args.config)
+    logger.info("Device: %s", args.device)
+    logger.info("Resume: %s", args.resume)
+
+    from src.training.trainer import ARCHONTrainer
+    trainer = ARCHONTrainer(
+        config_path=args.config,
+        resume=args.resume,
+        device=args.device,
+    )
+    trainer.train_phase1_only()
+    logger.info("Phase 1 weights saved to: outputs/runs/phase1/weights/best.pt")
+
+
+def stage_train_phase2(args: argparse.Namespace) -> None:
+    """Stage 4b: Train Phase 2 with Attribute Heads.
+
+    Fine-tunes with disease attribute heads on all data (including pseudo labels).
+    Requires Phase 1 weights to already exist.
+
+    Inputs:
+      outputs/runs/phase1/weights/best.pt  (backbone from Phase 1)
+      data/processed/labels_ext/train/     (with pseudo labels if available)
+
+    Output:
+      outputs/runs/phase2/weights/best.pt
+      outputs/runs/phase2/weights/attr_best.pt
+    """
+    _section_header("STAGE 4b — Train Phase 2 (With Attribute Heads)")
+    logger.info("Config: %s", args.config)
+    logger.info("Device: %s", args.device)
+    logger.info("Resume: %s", args.resume)
+
+    phase1_weights = PROJECT_ROOT / "outputs" / "runs" / "phase1" / "weights" / "best.pt"
+    if not phase1_weights.exists():
+        logger.error(
+            "Phase 1 weights not found at '%s'. "
+            "Run --mode train_phase1 first.",
+            phase1_weights,
+        )
+        sys.exit(1)
+
+    from src.training.trainer import ARCHONTrainer
+    trainer = ARCHONTrainer(
+        config_path=args.config,
+        resume=args.resume,
+        device=args.device,
+    )
+    trainer.train_phase2_only()
+    logger.info("Phase 2 weights saved to: outputs/runs/phase2/weights/best.pt")
+
+
 def stage_evaluate(args: argparse.Namespace) -> None:
     """Stage 5: Evaluate the trained model on the validation set.
 
@@ -492,6 +567,8 @@ def main() -> None:
     dispatch = {
         "preprocess":    stage_preprocess,
         "pseudo_label":  stage_pseudo_label,
+        "train_phase1":  stage_train_phase1,
+        "train_phase2":  stage_train_phase2,
         "train":         stage_train,
         "train_attr":    stage_train_attr,
         "train_hybrid":  stage_train_hybrid,
