@@ -15,9 +15,12 @@ training:
                            #   • Start from Phase 1 best.pt → converges faster.
                            #   • 50 allows all 3 data-type branches to stabilise.
 
-  phase2b_epochs: 50     # Phase 2b: attribute head fine-tuning (backbone frozen)
+  phase2b_epochs: 100    # Phase 2b: attribute head fine-tuning (backbone frozen)
+                         #   • Increased from 50 to 100 for better disease feature learning
+                         #   • More iterations allow binary heads to discriminate disease features
+                         #   • No backbone degradation (frozen) but better attr precision
 
-  phase3_epochs: 50        # Phase 3 (Hybrid): Swin encoder + cross-attention + severity head
+  phase3_epochs: 100       # Phase 3 (Hybrid): Swin encoder + cross-attention + severity head
                            #   • Backbone + attr heads frozen; only new components trained.
                            #   • 50 epochs with CosineAnnealingLR (5e-4 → 1e-6) is enough
                            #     because the heads are shallow and the backbone is stable.
@@ -71,11 +74,12 @@ training:
 
   # Disease attribute pos_weight for Phase 2b BCEWithLogitsLoss.
   # Counteracts class imbalance (most teeth are healthy → label=0).
-  # The trainer auto-computes this from the dataset if left null.
-  # To override, set a list of 4 values: [impacted, caries, deepcaries, lesion].
-  # Rule of thumb: ~(#healthy_teeth / #diseased_teeth) per attribute.
-  # Example DENTEX estimates: impacted≈5, caries≈3, deepcaries≈8, lesion≈5.
-  attr_pos_weight: null      # null = auto-computed from dataset (recommended)
+  # Higher weight = penalize missing diseases more (improve RECALL).
+  # TUNED for RECALL optimization (find diseases, accept some false positives).
+  # Strategy: 1.5-1.7x baseline to prioritize disease detection.
+  # Baseline estimates: [5.0, 3.0, 8.0, 5.0] for [impacted, caries, deepcaries, lesion]
+  # New: Increase to prioritize RECALL over specificity (clinical requirement).
+  attr_pos_weight: [8.0, 5.0, 12.0, 8.0]  # TUNED for disease detection focus
 
   # Validation interval (evaluate every N epochs)
   val_interval: 5
@@ -89,17 +93,22 @@ training:
   patience: 50
 
 augmentation:
-  # Standard augmentation
+  # Enhanced augmentation for better disease feature generalization
   hsv_h: 0.015               # HSV hue augmentation (not critical for X-rays)
   hsv_s: 0.0                 # X-rays are grayscale — no saturation aug
-  hsv_v: 0.4                 # Brightness variation (simulates exposure differences)
-  degrees: 5.0               # Rotation (small; teeth layout should stay upright)
-  translate: 0.1             # Translation
-  scale: 0.5                 # Scale jitter
-  shear: 2.0                 # Shear
-  flipud: 0.0                # No vertical flip (skull anatomy)
+  hsv_v: 0.6                 # INCREASED: 0.4→0.6 for wider exposure variation
+                             #   • Disease features (cavities) visible under different exposures
+                             #   • Simulates real clinical X-ray equipment differences
+  degrees: 10.0              # INCREASED: 5.0→10.0 for broader rotation variation
+                             #   • Mouth positioning varies; model needs rotation invariance
+  translate: 0.1             # Translation (unchanged — adequate)
+  scale: 0.7                 # INCREASED: 0.5→0.7 for more zoom variation
+                             #   • Disease features appear at different magnifications
+  shear: 2.0                 # Shear (unchanged — adequate)
+  flipud: 0.0                # No vertical flip (skull anatomy — correct)
   fliplr: 0.5                # Horizontal flip WITH quadrant remapping (Section 2.1)
   mosaic: 0.0                # Disable mosaic (panoramic X-rays must not be mixed)
   mixup: 0.0                 # Disable mixup
-  blur: 0.1                  # Random Gaussian blur (simulate motion/noise)
+  blur: 0.2                  # INCREASED: 0.1→0.2 for more motion/equipment blur
+                             #   • X-ray artifacts and motion blur common in clinical images
   copy_paste: 0.0
