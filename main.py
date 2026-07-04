@@ -216,7 +216,7 @@ def stage_pseudo_label(args: argparse.Namespace) -> None:
 
 
 def stage_train_attr(args: argparse.Namespace) -> None:
-    """Stage 4b: Re-train attribute heads only (Phase 2b).
+    """Stage 4b: Re-train attribute heads only (Phase 2 variant).
 
     Use this when attr_best.pt is missing or was trained with the no_grad bug
     (all disease predictions show ~0.001 probability / everything healthy).
@@ -242,7 +242,7 @@ def stage_train_attr(args: argparse.Namespace) -> None:
 
 
 def stage_train_hybrid(args: argparse.Namespace) -> None:
-    """Stage 4c: Train hybrid components (Phase 3).
+    """Stage 5: Train hybrid components (Phase 3).
 
     Trains the three new architectural improvements on top of an already-trained
     Phase 2 detection backbone (which must exist before running this mode):
@@ -265,7 +265,7 @@ def stage_train_hybrid(args: argparse.Namespace) -> None:
       python main.py --mode train_hybrid
       python main.py --mode train_hybrid --weights weights/archon_best.pt
     """
-    _section_header("STAGE 4c — Train Hybrid Components (Phase 3)")
+    _section_header("STAGE 5 — Train Hybrid Components (Phase 3)")
     logger.info("Config: %s", args.config)
     logger.info("Device: %s", args.device)
 
@@ -303,7 +303,7 @@ def stage_train(args: argparse.Namespace) -> None:
 
 
 def stage_train_phase1(args: argparse.Namespace) -> None:
-    """Stage 4a: Train Phase 1 Detection Only.
+    """Stage 3: Train Phase 1 Detection Only.
 
     Trains YOLOv8x + CoordConv on Parts 1+2 (detection only).
     This phase is required before generating pseudo labels.
@@ -311,7 +311,7 @@ def stage_train_phase1(args: argparse.Namespace) -> None:
     Output:
       outputs/runs/phase1/weights/best.pt
     """
-    _section_header("STAGE 4a — Train Phase 1 (Detection Only)")
+    _section_header("STAGE 3 — Train Phase 1 (Detection Only)")
     logger.info("Config: %s", args.config)
     logger.info("Device: %s", args.device)
     logger.info("Resume: %s", args.resume)
@@ -327,7 +327,7 @@ def stage_train_phase1(args: argparse.Namespace) -> None:
 
 
 def stage_train_phase2(args: argparse.Namespace) -> None:
-    """Stage 4b: Train Phase 2 with Attribute Heads.
+    """Stage 4: Train Phase 2 with Attribute Heads.
 
     Fine-tunes with disease attribute heads on all data (including pseudo labels).
     Requires Phase 1 weights to already exist.
@@ -340,7 +340,7 @@ def stage_train_phase2(args: argparse.Namespace) -> None:
       outputs/runs/phase2/weights/best.pt
       outputs/runs/phase2/weights/attr_best.pt
     """
-    _section_header("STAGE 4b — Train Phase 2 (With Attribute Heads)")
+    _section_header("STAGE 4 — Train Phase 2 (With Attribute Heads)")
     logger.info("Config: %s", args.config)
     logger.info("Device: %s", args.device)
     logger.info("Resume: %s", args.resume)
@@ -365,13 +365,13 @@ def stage_train_phase2(args: argparse.Namespace) -> None:
 
 
 def stage_evaluate(args: argparse.Namespace) -> None:
-    """Stage 5: Evaluate the trained model on the validation set.
+    """Stage 6: Evaluate the trained model on the validation set.
 
     Reports standard COCO detection metrics:
       AP-Quadrant, AP-Enumeration, AP-Diagnosis (as per Dentex challenge)
       mAP@0.5, mAP@0.5:0.95
     """
-    _section_header("STAGE 5 — Evaluate ARCHON")
+    _section_header("STAGE 6 — Evaluate ARCHON")
 
     weights = args.weights or str(PROJECT_ROOT / "weights" / "archon_best.pt")
     if not Path(weights).exists():
@@ -401,13 +401,13 @@ def stage_evaluate(args: argparse.Namespace) -> None:
 
 
 def stage_predict(args: argparse.Namespace) -> None:
-    """Stage 6: Run inference on image(s) and save annotated results.
+    """Stage 7: Run inference on image(s) and save annotated results.
 
     Outputs per image:
       <stem>_vis.jpg   — Annotated panoramic X-ray with bounding boxes + FDI labels
       <stem>_result.json — Structured JSON with tooth detections + disease attributes
     """
-    _section_header("STAGE 6 — Predict (Inference)")
+    _section_header("STAGE 7 — Predict (Inference)")
 
     if args.input is None:
         logger.error("--input argument required for predict mode.")
