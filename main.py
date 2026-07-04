@@ -488,13 +488,7 @@ def run_full_pipeline(args: argparse.Namespace) -> None:
 
     # Phase 1 only: train detector on Parts 1+2 (needed to produce pseudo labels).
     # Phase 2 is intentionally skipped here so pseudo labels can be generated first.
-    from src.training.trainer import ARCHONTrainer
-    trainer = ARCHONTrainer(
-        config_path=args.config,
-        resume=args.resume,
-        device=args.device,
-    )
-    trainer.train_phase1_only()
+    stage_train_phase1(args)
 
     stage_pseudo_label(args)
 
