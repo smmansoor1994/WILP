@@ -46,6 +46,7 @@ from src.inference.postprocess import (
 from src.utils.visualize import draw_teeth_detections
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # Supported image extensions
 IMG_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
@@ -161,7 +162,7 @@ class ARCHONPredictor:
         # searching for a standalone attr_best.pt alongside the weights file.
         if _merged_ckpt is not None and _merged_ckpt.get("attr_heads_state"):
             # Write a temporary attr checkpoint so _load_attr_heads can consume it.
-            # Use the real attr_loss stored in the merged checkpoint so the
+            # Use the real attr_loss and attr_epoch stored in the merged checkpoint so the
             # training-sanity check in _load_attr_heads reports correct values.
             import tempfile, os
             _tmp_attr = Path(tempfile.mktemp(suffix="_attr_best.pt"))
@@ -169,6 +170,7 @@ class ARCHONPredictor:
                 {
                     "attr_heads_state": _merged_ckpt["attr_heads_state"],
                     "loss": _merged_ckpt.get("attr_loss", float("inf")),
+                    "epoch": _merged_ckpt.get("attr_epoch", -1),
                 },
                 _tmp_attr,
             )
@@ -235,14 +237,21 @@ class ARCHONPredictor:
             # the model genuinely trained, even if biases are close to init.
             state = checkpoint.get("attr_heads_state", {})
             checkpoint_loss = checkpoint.get("loss", float("inf"))
+            checkpoint_epoch = checkpoint.get("epoch", -1)
             init_bias = -math.log(99)  # ≈ -4.595 — what nn.init sets at startup
             bias_vals = [
                 v.item() for k, v in state.items()
                 if "out.bias" in k
             ]
             biases_near_init = bias_vals and all(abs(b - init_bias) < 0.5 for b in bias_vals)
-            loss_suggests_untrained = checkpoint_loss > 1.0
-            if biases_near_init and loss_suggests_untrained:
+            # Criteria for "trained":
+            #   1. If epoch >= 5: definitely trained (new checkpoints with epoch saved)
+            #   2. If loss < 3.5: likely trained (BCE + pos_weight converge in 2-4 range)
+            #   3. If both biases near init AND loss >= 3.5 AND epoch == -1:
+            #      probably untrained (old checkpoint format without epoch saved)
+            trained_epochs_exist = checkpoint_epoch >= 5
+            reasonable_loss = checkpoint_loss < 3.5
+            if biases_near_init and not trained_epochs_exist and not reasonable_loss:
                 logger.warning(
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     "  UNTRAINED ATTR HEADS DETECTED in '%s'\n"
@@ -317,6 +326,7 @@ class ARCHONPredictor:
         output_dir: Optional[str] = None,
         save_json: bool = True,
         save_vis: bool = True,
+        diseased_only: bool = True,
     ) -> Dict[str, List[ToothDetection]]:
         """Run prediction on image(s).
 
@@ -325,6 +335,7 @@ class ARCHONPredictor:
             output_dir: Directory to save visualizations and JSON results.
             save_json:  Save per-image JSON results.
             save_vis:   Save annotated visualization images.
+            diseased_only: If True, only annotate and save diseased teeth (default: True).
 
         Returns:
             Dict mapping image filename → list of ToothDetection results.
@@ -371,12 +382,17 @@ class ARCHONPredictor:
 
             # Save outputs
             if out_dir and teeth:
+                # Filter teeth for visualization if diseased_only is True
+                teeth_to_save = teeth
+                if diseased_only:
+                    teeth_to_save = [t for t in teeth if t.diseases]
+                
                 if save_json:
                     self._save_json(teeth, out_dir / f"{img_path.stem}_result.json")
-                if save_vis:
+                if save_vis and teeth_to_save:
                     img = cv2.imread(str(img_path))
                     if img is not None:
-                        vis = draw_teeth_detections(img, teeth)
+                        vis = draw_teeth_detections(img, teeth_to_save)
                         cv2.imwrite(
                             str(out_dir / f"{img_path.stem}_vis.jpg"), vis
                         )
@@ -401,6 +417,8 @@ class ARCHONPredictor:
         Returns:
             List of ToothDetection after linear sum assignment.
         """
+        print(f"[DEBUG] _predict_single START: img_path={img_path}", flush=True)
+        logger.debug("_predict_single START: img_path=%s", img_path)
         # Clear captured FPN features
         self._fpn_features = []
 
@@ -422,8 +440,15 @@ class ARCHONPredictor:
 
         # Run attribute heads if available
         attr_probs = None
+        logger.debug("After detection: _fpn_features=%s, _attr_heads=%s, len(_fpn_features)=%d",
+                    type(self._fpn_features), type(self._attr_heads), len(self._fpn_features) if self._fpn_features else 0)
         if self._attr_heads is not None and self._fpn_features:
+            logger.debug("Calling _predict_attributes with %d FPN features", len(self._fpn_features))
             attr_probs = self._predict_attributes(result)
+        else:
+            logger.debug("Skipping attributes: attr_heads=%s, fpn_features=%s",
+                        "OK" if self._attr_heads else "None",
+                        f"{len(self._fpn_features)} features" if self._fpn_features else "empty list")
 
         # Post-process with linear sum assignment
         teeth = postprocess_yolo_output(
@@ -455,7 +480,12 @@ class ARCHONPredictor:
                          Use for models trained with image-level global pooling
                          (e.g. baseline-disease-100-main).
         """
+        logger.debug("_predict_attributes called: has_fpn=%s, has_attr_heads=%s", 
+                     bool(self._fpn_features), bool(self._attr_heads))
         if not self._fpn_features or self._attr_heads is None:
+            logger.debug("Early return: fpn_features=%s, attr_heads=%s",
+                        len(self._fpn_features) if self._fpn_features else 0,
+                        "loaded" if self._attr_heads else "None")
             return None
 
         try:
@@ -549,6 +579,15 @@ class ARCHONPredictor:
 
                     per_tooth_logits_t = torch.stack(per_tooth_logits, dim=0)  # (N, 4)
                     per_tooth_probs = torch.sigmoid(per_tooth_logits_t).cpu().numpy()  # (N, 4)
+
+                    # Debug: log raw logits and probabilities for each detection
+                    for i in range(len(per_tooth_logits_t)):
+                        logits = per_tooth_logits_t[i].cpu().numpy()
+                        probs = per_tooth_probs[i]
+                        logger.debug(
+                            "  Tooth %d: logits=[%.3f, %.3f, %.3f, %.3f]  probs=[%.3f, %.3f, %.3f, %.3f]",
+                            i, *logits.tolist(), *probs.tolist()
+                        )
 
                 logger.info(
                     "Attr per-tooth probs range  min=[%.3f, %.3f, %.3f, %.3f]"

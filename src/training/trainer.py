@@ -1015,22 +1015,24 @@ class ARCHONHybridTrainer(ARCHONTrainer):
             "det_weights_path":     str(base_weights),  # ultralytics-compatible .pt
             "attr_heads_state":     None,
             "attr_loss":            None,
+            "attr_epoch":           None,
             "global_encoder_state": None,
             "fusion_state":         None,
             "hybrid_head_state":    None,
             "phases": ["phase1", "phase2"],
         }
 
-        # Merge Phase 2b attribute heads (and preserve the training loss for
+        # Merge Phase 2b attribute heads (and preserve the training loss and epoch for
         # the predictor's sanity check so it doesn't report misleading values).
         attr_path = self.project_root / "weights" / "attr_best.pt"
         if attr_path.exists():
             attr_ckpt = torch.load(attr_path, map_location="cpu", weights_only=False)
             merged["attr_heads_state"] = attr_ckpt.get("attr_heads_state")
             merged["attr_loss"]        = attr_ckpt.get("loss")
+            merged["attr_epoch"]       = attr_ckpt.get("epoch")
             merged["phases"].append("phase2b_attr")
-            logger.info("  + attr heads from '%s' (loss=%.4f)",
-                        attr_path, merged["attr_loss"] or float("nan"))
+            logger.info("  + attr heads from '%s' (loss=%.4f, epoch=%s)",
+                        attr_path, merged["attr_loss"] or float("nan"), merged["attr_epoch"] or "?")
         else:
             logger.warning("  attr_best.pt not found — attribute heads omitted from merge.")
 

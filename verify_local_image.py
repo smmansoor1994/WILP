@@ -172,6 +172,10 @@ def main():
         help="Print raw YOLO detections (before linear sum assignment) to diagnose "
              "missed teeth and wrong-quadrant assignments."
     )
+    parser.add_argument(
+        "--include-healthy", action="store_true",
+        help="Include healthy teeth in output and image (default: show only diseased teeth)."
+    )
     args = parser.parse_args()
 
     # ── Validate image path ───────────────────────────────────────────────────
@@ -246,6 +250,7 @@ def main():
         output_dir=effective_save_dir if save else None,
         save_json=save,
         save_vis=save,
+        diseased_only=not args.include_healthy,
     )
 
     # ── Print per-tooth summary ───────────────────────────────────────────────
@@ -267,7 +272,10 @@ def main():
         print(f"  Diseased : {len(diseased)}")
         print()
 
-        for tooth in sorted(teeth, key=lambda t: t.fdi):
+        # Filter teeth to display based on --include-healthy flag
+        teeth_to_display = sorted(teeth, key=lambda t: t.fdi) if args.include_healthy else diseased
+
+        for tooth in teeth_to_display:
             disease_str = ", ".join(tooth.diseases) if tooth.diseases else "Healthy"
             # Show raw attribute probabilities for each tooth to aid threshold tuning
             attr_raw = (
