@@ -75,11 +75,11 @@ training:
   # Disease attribute pos_weight for Phase 2b BCEWithLogitsLoss.
   # Counteracts class imbalance (most teeth are healthy → label=0).
   # Higher weight = penalize missing diseases more (improve RECALL).
-  # TUNED for RECALL optimization (find diseases, accept some false positives).
-  # Strategy: 1.5-1.7x baseline to prioritize disease detection.
-  # Baseline estimates: [5.0, 3.0, 8.0, 5.0] for [impacted, caries, deepcaries, lesion]
-  # New: Increase to prioritize RECALL over specificity (clinical requirement).
-  attr_pos_weight: [8.0, 5.0, 12.0, 8.0]  # TUNED for disease detection focus
+  # CORRECTED: Previous value [8.0, 5.0, 12.0, 8.0] was too aggressive.
+  # Resulted in 75% false positive rate (model predicting 3 diseases per tooth).
+  # New: Balanced between recall and precision. Avoids over-aggressive predictions.
+  # Conservative tuning: 1.2x baseline to improve disease detection without noise.
+  attr_pos_weight: [6.0, 3.6, 9.6, 6.0]  # CORRECTED for balanced recall/precision
 
   # Validation interval (evaluate every N epochs)
   val_interval: 5
