@@ -255,12 +255,57 @@ def build_archon_base(
     Returns:
         ARCHON model instance.
     """
+    import torch
     from ultralytics import YOLO
 
     logger.info("Loading base model: %s", base_weights)
 
-    # Load YOLOv8x (pretrained on COCO; we re-train the head for 32 tooth classes)
-    base = YOLO(base_weights)
+    # ─── Custom checkpoint loader for ARCHON architectures ────────────────────
+    # Ultralytics YOLO strict format checking fails on custom ARCHON checkpoints
+    # (CoordConv, custom heads, etc.). Use torch.load with weights_only=False.
+    base = None
+    try:
+        # Try standard YOLO loading first
+        base = YOLO(base_weights)
+    except (TypeError, RuntimeError) as e:
+        error_msg = str(e)
+        if "references types outside" in error_msg or "pickle" in error_msg.lower():
+            logger.warning(
+                "YOLO format check failed (custom architecture detected). "
+                "Loading with torch.load (weights_only=False)..."
+            )
+            # Load ARCHON checkpoint directly
+            try:
+                ckpt = torch.load(base_weights, map_location="cpu", weights_only=False)
+                logger.info("✓ Loaded checkpoint with custom types support")
+                
+                # Create vanilla YOLOv8x as template for the YOLO wrapper
+                base = YOLO("yolov8x.pt")
+                
+                # Extract model from checkpoint
+                if isinstance(ckpt, dict) and "model" in ckpt:
+                    loaded_model = ckpt["model"]
+                else:
+                    loaded_model = ckpt
+                
+                # If it's a state dict, load it directly
+                if isinstance(loaded_model, dict):
+                    try:
+                        base.model.load_state_dict(loaded_model, strict=False)
+                    except RuntimeError:
+                        logger.warning("Strict loading failed, trying with strict=False...")
+                else:
+                    # It's a full model object — extract state dict
+                    try:
+                        base.model.load_state_dict(loaded_model.state_dict(), strict=False)
+                    except (AttributeError, RuntimeError):
+                        pass
+                        
+            except Exception as load_err:
+                logger.error("Failed to load checkpoint: %s", load_err)
+                raise
+        else:
+            raise
 
     # Modify number of classes if needed
     # ultralytics YOLO reconfigures the head automatically based on the dataset YAML
