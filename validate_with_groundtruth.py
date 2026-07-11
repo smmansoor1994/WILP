@@ -29,6 +29,8 @@ TEST_IMAGES = [
     "train_201.png",
 ]
 
+TEST_IMAGES = [f"train_{i}.png" for i in range(501)]
+
 IMG_DIR = Path(r"D:\WILP\sem-4\Dataset\DENTEX\DENTEX\training_data\quadrant-enumeration-disease\xrays")
 GT_JSON = Path(r"D:\WILP\sem-4\Dataset\DENTEX\DENTEX\training_data\quadrant-enumeration-disease\train_quadrant_enumeration_disease.json")
 WEIGHTS = Path(r"D:\WILP\Workingcode\models\archon-100-main-hybrid\weights_20260704_163459\content\WILP\weights\archon_best.pt")
