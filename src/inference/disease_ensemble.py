@@ -139,12 +139,12 @@ class DiseaseEnsemble:
         )
         
         # Initialize crop extractor
-        self.cropper = DiseaseCropper(margin=0.15)
+        self.cropper = DiseaseCropper(margin_ratio=0.15)
         
         # Initialize Stage 2: Disease classifiers
         self.classifier = DiseaseClassifier(
             backbone="resnet50",
-            lr=0.0001,
+            learning_rate=0.0001,
             batch_size=16,
             device=device
         )
@@ -168,21 +168,12 @@ class DiseaseEnsemble:
     def _load_stage2_models(self):
         """Load 4 trained disease classifiers from disk"""
         logger.info("Loading Stage-2 disease classifiers...")
+        self.classifier.load(self.stage2_models_dir)
         
-        model_files = {
-            'has_caries': self.stage2_models_dir / 'has_caries_model.pt',
-            'has_deepcaries': self.stage2_models_dir / 'has_deepcaries_model.pt',
-            'has_lesion': self.stage2_models_dir / 'has_lesion_model.pt',
-            'has_impacted': self.stage2_models_dir / 'has_impacted_model.pt',
-        }
-        
-        for disease, model_path in model_files.items():
-            if not model_path.exists():
-                logger.warning(f"Model not found: {model_path}")
-                continue
-            
-            self.classifier.load(model_path, disease)
-            logger.info(f"  ✓ Loaded {disease}")
+        if not self.classifier.models:
+            logger.warning("No disease classifiers were loaded")
+        else:
+            logger.info(f"✓ Loaded {len(self.classifier.models)} disease classifiers")
     
     def predict_single(self, image_path: Path) -> Dict[str, EnsemblePrediction]:
         """
@@ -198,7 +189,7 @@ class DiseaseEnsemble:
         
         # Stage 1: Enumerate teeth and detect diseases
         logger.info(f"Stage 1: Enumerating teeth in {image_path.name}")
-        stage1_results = self.predictor.predict([image_path])
+        stage1_results = self.predictor.predict(image_path, save_json=False, save_vis=False)
         
         if not stage1_results or image_path.name not in stage1_results:
             logger.warning(f"No teeth detected in {image_path.name}")
@@ -209,9 +200,21 @@ class DiseaseEnsemble:
             logger.info(f"No teeth detected in {image_path.name}")
             return {}
         
+        # Load image for cropping
+        image = cv2.imread(str(image_path))
+        if image is None:
+            logger.error(f"Failed to load image: {image_path}")
+            return {}
+        
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
         # Extract crops for Stage 2
         logger.info(f"Stage 2: Extracting crops and classifying diseases")
-        crops = self.cropper.extract_crops_from_prediction(detections)
+        crops = self.cropper.extract_crops_from_prediction(
+            image=image,
+            teeth_detections=detections,
+            image_id=image_path.stem
+        )
         
         if not crops:
             logger.warning("No crops extracted")
@@ -221,7 +224,7 @@ class DiseaseEnsemble:
         predictions = {}
         
         for crop in crops:
-            fdi = crop.fdi_number
+            fdi = crop.fdi
             
             # Get Stage-1 disease scores
             stage1_scores = self._extract_stage1_scores(crop)
@@ -278,13 +281,11 @@ class DiseaseEnsemble:
         scores = {}
         
         # Get Stage-1 raw predictions from crop metadata
-        if crop.pred_labels:
-            for disease in self.diseases:
-                # pred_labels contains Stage-1 predictions
-                scores[disease] = float(crop.pred_labels.get(disease, 0.0))
-        else:
-            # Default to zero if not available
-            scores = {disease: 0.0 for disease in self.diseases}
+        # These are stored as boolean pred_has_* fields from ToothDetection
+        scores['has_caries'] = float(crop.pred_has_caries) if crop.pred_has_caries is not None else 0.5
+        scores['has_deepcaries'] = float(crop.pred_has_deepcaries) if crop.pred_has_deepcaries is not None else 0.5
+        scores['has_lesion'] = float(crop.pred_has_lesion) if crop.pred_has_lesion is not None else 0.5
+        scores['has_impacted'] = float(crop.pred_has_impacted) if crop.pred_has_impacted is not None else 0.5
         
         return scores
     

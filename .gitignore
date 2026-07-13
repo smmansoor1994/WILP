@@ -25,7 +25,8 @@ env/
 data/processed/
 data/unlabelled/
 data/pseudo/
-
+outputs/
+weights/
 # ── Ultralytics label cache files ─────────────────────────────────────────────
 *.cache
 

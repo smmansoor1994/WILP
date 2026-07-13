@@ -22,17 +22,21 @@ from src.inference.disease_ensemble import DiseaseEnsemble, create_ensemble
 # ============================================================================
 
 CONFIG = {
-    # Paths
+    # Paths - USE VALIDATION CROPS (have ground truth labels)
     "archon_weights": Path("weights/archon_best.pt"),
     "stage2_models_dir": Path("outputs/disease_validation_option2/stage2_models"),
-    "test_images_dir": Path("data/processed/images/test"),
-    "labels_dir": Path("data/processed/labels_ext/test"),
+    "crops_dir": Path("outputs/disease_validation_option2/stage1_crops"),
+    "use_crops": True,  # Evaluate on extracted crops with GT labels
+    
+    # Legacy paths (if use_crops=False)
+    "test_images_dir": Path("data/processed/images/train"),  # Use training set
+    "labels_dir": Path("data/processed/labels_ext/train"),   # Has labels
     
     # Ensemble weights
-    "stage1_weight": 0.3,   # ARCHON enumeration
-    "stage2_weight": 0.7,   # Disease classifiers
+    "stage1_weight": 0.3,
+    "stage2_weight": 0.7,
     
-    # Thresholds (can be tuned based on report)
+    # Thresholds
     "thresholds": {
         "has_caries": 0.45,
         "has_deepcaries": 0.45,
