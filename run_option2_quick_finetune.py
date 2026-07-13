@@ -56,9 +56,9 @@ def main():
         # Training config
         "device": "cuda",  # Use CPU since CUDA not available
         "batch_size": 16,
-        "epochs": 20,  # Light training (quick)
+        "epochs": 50,  # Full training for production models
         "val_split": 0.2,
-        "sample_images": 50,  # Test with 50 images first (to check it works)
+        "sample_images": None,  # Use ALL training images
     }
     
     logger.info("Configuration:")
@@ -66,8 +66,9 @@ def main():
     logger.info(f"  • Images: {CONFIG['images_dir']}")
     logger.info(f"  • Device: {CONFIG['device']}")
     logger.info(f"  • Epochs: {CONFIG['epochs']}")
-    logger.info(f"  • Sample images: {CONFIG['sample_images'] or 'ALL'}")
+    logger.info(f"  • Sample images: {CONFIG['sample_images'] or 'ALL (FULL DATASET)'}")
     logger.info(f"  • Output: {CONFIG['output_dir']}\n")
+    logger.info("⚠️  RUNNING FULL DATASET - This will take ~2-3 hours on GPU\n")
     
     # Validate configuration
     if not CONFIG["model_weights"].exists():
@@ -199,12 +200,6 @@ def main():
                     f"Recall={metrics.get('recall', 0):.3f} | "
                     f"F1={metrics.get('f1', 0):.3f}"
                 )
-            
-            # Note about ground truth
-            num_crops = stage_3_results.get("summary", {}).get("num_crops", 0)
-            crops_with_gt = stage_3_results.get("summary", {}).get("num_images", 0)
-            logger.info(f"\n⚠️  NOTE: Only {s1_stats['crops_with_gt']} of {s1_stats['total_crops']} crops have ground truth labels")
-            logger.info("    To improve validation: ensure label files contain disease attributes (10-column YOLO format)")
         
     except Exception as e:
         logger.error(f"Stage 3 failed: {e}", exc_info=True)
