@@ -45,7 +45,7 @@ def main():
         
         # Data paths
         "images_dir": Path("data/processed/images/train"),
-        "labels_dir": Path("data/processed/labels/train"),
+        "labels_dir": Path("data/processed/labels_ext/train"),  # Extended labels with disease attributes
         
         # Output directories
         "output_dir": Path("outputs/disease_validation_option2"),
@@ -199,7 +199,12 @@ def main():
                     f"Recall={metrics.get('recall', 0):.3f} | "
                     f"F1={metrics.get('f1', 0):.3f}"
                 )
-            logger.info()
+            
+            # Note about ground truth
+            num_crops = stage_3_results.get("summary", {}).get("num_crops", 0)
+            crops_with_gt = stage_3_results.get("summary", {}).get("num_images", 0)
+            logger.info(f"\n⚠️  NOTE: Only {s1_stats['crops_with_gt']} of {s1_stats['total_crops']} crops have ground truth labels")
+            logger.info("    To improve validation: ensure label files contain disease attributes (10-column YOLO format)")
         
     except Exception as e:
         logger.error(f"Stage 3 failed: {e}", exc_info=True)

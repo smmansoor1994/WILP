@@ -209,14 +209,32 @@ class DiseaseCropper:
         img_h, img_w = image.shape[:2]
         crops = []
         
-        for tooth in teeth_detections:
+        if not teeth_detections:
+            logger.debug(f"No teeth detections for {image_id}")
+            return crops
+        
+        for tooth_idx, tooth in enumerate(teeth_detections):
             try:
+                # Validate tooth object
+                if not hasattr(tooth, 'bbox_xyxy'):
+                    logger.warning(f"Tooth {tooth_idx} missing bbox_xyxy attribute. Type: {type(tooth)}")
+                    continue
+                
+                if not hasattr(tooth, 'fdi'):
+                    logger.warning(f"Tooth {tooth_idx} missing fdi attribute")
+                    continue
+                
                 # Extract crop
                 crop_img, crop_bbox = self.extract_crop(
                     image,
                     tuple(tooth.bbox_xyxy),
                     expand=True
                 )
+                
+                # Validate crop
+                if crop_img is None or crop_img.size == 0:
+                    logger.warning(f"Empty crop for FDI {tooth.fdi} in {image_id}")
+                    continue
                 
                 # Create DiseaseCrop object
                 dc = DiseaseCrop(
@@ -240,9 +258,10 @@ class DiseaseCropper:
                 crops.append(dc)
                 
             except Exception as e:
-                logger.warning(f"Failed to extract crop for FDI {tooth.fdi}: {e}")
+                logger.warning(f"Failed to extract crop for tooth {tooth_idx}: {e}", exc_info=True)
                 continue
         
+        logger.debug(f"Extracted {len(crops)} crops from {image_id} ({len(teeth_detections)} detections)")
         return crops
     
     def save_crop(

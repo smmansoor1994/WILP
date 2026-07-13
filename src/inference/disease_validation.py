@@ -99,7 +99,9 @@ class DiseaseValidationPipeline:
                     save_json=False,
                 )
                 
-                teeth_detections = pred_results.get(image_id, [])
+                # The predictor returns results keyed by img_path.name (with extension)
+                # not by img_path.stem, so we need to look up using the filename
+                teeth_detections = pred_results.get(img_path.name, [])
                 
                 crops = cropper.extract_crops_from_prediction(
                     image=image,
@@ -107,8 +109,17 @@ class DiseaseValidationPipeline:
                     image_id=image_id,
                 )
                 
+                # Load ground truth labels
+                # Try labels_ext first (with disease attributes), then fall back to labels
+                label_path_ext = labels_dir.parent / "labels_ext" / labels_dir.name / f"{image_id}.txt"
                 label_path = labels_dir / f"{image_id}.txt"
-                gt_labels = self._load_yolo_labels(label_path) if label_path.exists() else {}
+                
+                if label_path_ext.exists():
+                    gt_labels = self._load_yolo_labels(label_path_ext)
+                elif label_path.exists():
+                    gt_labels = self._load_yolo_labels(label_path)
+                else:
+                    gt_labels = {}
                 
                 for crop in crops:
                     if crop.fdi in gt_labels:
