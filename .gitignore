@@ -57,3 +57,5 @@ Thumbs.db
 config/dataset_pseudo.yaml
 
 yolortho.log
+
+/demo_images_*
