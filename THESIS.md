@@ -1561,29 +1561,29 @@ The following tables present the experimental results measured directly from the
 
 | Model | mAP@0.5 | mAP@0.5:0.95 | Precision | Recall | Peak F1 | Best Epoch |
 |---|---|---|---|---|---|---|
-| ARCHON Phase 1 (YOLOrtho-equiv, 100 ep) | 0.1455 | 0.0896 | 0.2268 | 0.2824 | 0.14 @ conf=0.059 | 65 |
-| ARCHON Phase 2 (fine-tune, 53 ep) — best saved | 0.1475 | 0.0885 | 0.2873 | 0.2665 | 0.14 @ conf=0.059 | 1 |
-| ARCHON Full Eval (unified archon_best.pt) | **0.138** | — | — | — | **0.14 @ conf=0.059** | — |
+| ARCHON Phase 1 (YOLOrtho-equiv, 100 ep) | 0.5128 | 0.3415 | 0.5292 | 0.5171 | 0.45 @ conf=0.377 | 55 |
+| ARCHON Phase 2 (fine-tune, 53 ep) — best saved | 0.5373 | 0.2945 | 0.6218 | 0.5018 | 0.38 @ conf=0.072 | 5 |
+| ARCHON Full Eval (unified archon_best.pt) | **0.499** | **0.293** | **0.528** | **0.529** | **0.38 @ conf=0.072** | — |
 
-> **Interpretation:** The 32-class fine-grained FDI detection task (one class per tooth, FDI 11–48) inherently produces lower per-class mAP than binary presence/absence detectors. A model correctly localising FDI 36 vs. a ground-truth FDI 37 is counted as a miss despite minimal spatial error. Phase 2 fine-tuning on the smaller disease-annotated subset caused validation loss to increase (overfitting), confirming that the Phase 1 checkpoint represents the stronger detection backbone. The Phase 2 best.pt (saved at epoch 1, mAP50=0.1475) is used as the ARCHON detection backbone in the unified archon_best.pt.
+> **Interpretation:** The current run artifacts show a materially stronger detector than the earlier draft values suggested. Phase 1 reaches mAP50=0.5128 at epoch 55, Phase 2 briefly improves further to mAP50=0.5373 at epoch 5 before overfitting on the smaller disease subset, and the merged `archon_best.pt` retains competitive detection quality at mAP50=0.499 on the eval run.
 
 ### Disease Attribute Head Training — Phase 2b Results
 
 | Attribute | Train Positives | Train Negatives | Class Weight (pos_weight) | Best BCE Loss |
 |---|---|---|---|---|
-| Impaction | 22 | 151 | 6.86 | — |
-| Caries | 65 | 108 | 1.66 | — |
-| Deep Caries | 24 | 149 | 6.21 | — |
-| Periapical Lesion | 3 | 170 | 20.0 | — |
-| **All attributes (best epoch 39/50)** | — | — | — | **0.6110** |
+| Impaction | 120 | 5133 | 20.0 | — |
+| Caries | 398 | 4855 | 12.20 | — |
+| Deep Caries | 107 | 5146 | 20.0 | — |
+| Periapical Lesion | 31 | 5222 | 20.0 | — |
+| **All attributes (best epoch 48/50)** | — | — | — | **2.3907** |
 
-> The severe class imbalance for Periapical Lesion (3 positives vs. 170 negatives in the training subset) is the primary challenge for attribute prediction. The pos_weight=20.0 upweighting is applied to partially compensate, but prediction reliability for this class is limited by data volume.
+> The current Phase 2b log was produced on the larger pseudo-labelled crop set (`1412` images), which substantially changes the observed class counts. The trainer caps several `pos_weight` values at `20.0`, indicating that deep caries and lesion supervision remain heavily imbalance-limited even after expanding the crop pool.
 
 ### Hybrid Head (Phase 3 Severity) — Training Results
 
 | Phase | Epochs | Final Loss | Best Loss | Best Epoch |
 |---|---|---|---|---|
-| Phase 3 — Swin + CrossAttn + Severity | 50 | 1.4167 | **1.3961** | 49 |
+| Phase 3 — Swin + CrossAttn + Severity | 50 | 1.4524 | **1.4469** | 42 |
 
 ---
 
@@ -1594,20 +1594,20 @@ The following tables present the experimental results measured directly from the
 ![Phase 1 Training Results — Loss and mAP curves across 100 epochs](outputs/content/WILP/outputs/runs/phase1/results.png)
 
 Key observations from Phase 1 (Figure 7.1):
-- **Training losses** (box, cls, dfl) converge steadily over 100 epochs, reaching box_loss ≈ 0.63, cls_loss ≈ 0.68, dfl_loss ≈ 0.93 at epoch 100.
-- **Validation cls_loss** shows a characteristic U-shape, bottoming out around epoch 40–50 before rising, indicating the optimal detection checkpoint lies around epoch 65 (best mAP50 = 0.1455).
-- **mAP50** plateaus in the 0.125–0.145 range from epoch 50 onward, with high epoch-to-epoch variance caused by the sparse validation set and 32-class imbalance.
-- **Precision** peaks early (~0.85 at epoch 3) at very high confidence thresholds but stabilises around 0.23–0.38 at operating confidence, reflecting the precision-recall trade-off for the multi-class FDI problem.
+- **Training losses** converge steadily over 100 epochs, ending at box_loss ≈ 0.515, cls_loss ≈ 0.251, dfl_loss ≈ 0.871.
+- **Best validation detection quality** occurs at epoch 55 with mAP50 = 0.5128 and mAP50-95 = 0.3415.
+- **mAP50** remains comparatively stable in the 0.45–0.51 range through the latter half of training, despite expected epoch-to-epoch variance from the sparse 32-class validation set.
+- **Final-epoch performance** remains strong (mAP50 = 0.4520), indicating Phase 1 training does not collapse even after the best checkpoint has passed.
 
 **Figure 7.2 — Phase 2 Learning Curves (53 epochs, disease-annotated fine-tuning)**
 
 ![Phase 2 Training Results — Loss and mAP curves across 53 epochs](outputs/content/WILP/outputs/runs/phase2/results.png)
 
 Key observations from Phase 2 (Figure 7.2):
-- **Training losses** continue to decrease (box ≈ 0.86, cls ≈ 1.08, dfl ≈ 1.14 at epoch 53), indicating the model continues learning on the disease subset.
-- **Validation losses** increase monotonically from epoch 1, signalling overfitting on the smaller disease-annotated subset (~173 images). This is expected given the dataset size reduction from Phase 1.
-- **mAP50** degrades from 0.147 (epoch 1) to approximately 0.057 (epoch 53), confirming the best detection checkpoint is the Phase 1-inherited backbone at Phase 2 epoch 1.
-- The Phase 2 best.pt (saved at epoch 1 with mAP50=0.1475) is the detection backbone embedded in archon_best.pt. The attribute and hybrid heads are trained separately on top of this frozen backbone.
+- **Training losses** continue to decrease on the disease subset, ending at box ≈ 0.750, cls ≈ 0.619, dfl ≈ 1.107 at epoch 53.
+- **Validation losses** still rise toward the end of training, signalling overfitting on the smaller disease-annotated subset.
+- **mAP50** peaks early at 0.5373 (epoch 5) and then degrades to 0.2407 by epoch 53, confirming that the saved early checkpoint should be preferred over the final epoch.
+- The Phase 2 best.pt checkpoint used to build `archon_best.pt` therefore reflects the early-epoch optimum rather than the end of fine-tuning.
 
 **P5 Receptive Field Analysis:**
 
@@ -1625,32 +1625,32 @@ The Precision-Recall (PR) curves below serve as the primary AUROC-equivalent dia
 
 **Figure 7.4 — PR Curve: Phase 2 Best Checkpoint**
 
-![Phase 2 Precision-Recall Curve — all classes 0.145 mAP@0.5](outputs/content/WILP/outputs/runs/phase2/BoxPR_curve.png)
+![Phase 2 Precision-Recall Curve — all classes 0.503 mAP@0.5](outputs/content/WILP/outputs/runs/phase2/BoxPR_curve.png)
 
 **Figure 7.5 — PR Curve: Full ARCHON Evaluation (archon_best.pt)**
 
-![ARCHON Eval Precision-Recall Curve — all classes 0.138 mAP@0.5](outputs/content/WILP/outputs/runs/eval/BoxPR_curve.png)
+![ARCHON Eval Precision-Recall Curve — all classes 0.499 mAP@0.5](outputs/content/WILP/outputs/runs/eval/BoxPR_curve.png)
 
 **AUROC Comparison Summary (PR-AUC as mAP@0.5):**
 
 | Checkpoint | mAP@0.5 (PR-AUC) | Max Precision | Notes |
 |---|---|---|---|
-| Phase 1 — YOLOrtho-equivalent | 0.145 | ~0.32 at low recall | Best single detection model |
-| Phase 2 best.pt | 0.145 | ~0.32 at low recall | Same as Phase 1 (epoch 1) |
-| Full ARCHON eval | **0.138** | ~0.33 at low recall | Minor drop from Phase 2 validation split shift |
+| Phase 1 — YOLOrtho-equivalent | 0.513 | ~0.79 at very low recall | Strongest Phase 1 checkpoint on current run |
+| Phase 2 best.pt | 0.503 | ~0.76 at very low recall | Early-epoch optimum preserved as best.pt |
+| Full ARCHON eval | **0.499** | ~0.79 at very low recall | Small drop after checkpoint unification |
 | YOLOrtho published (Mei et al.) | ~0.61* | — | *Reported on full DENTEX split |
 
-> The gap between ARCHON's observed mAP50 (0.138–0.145) and the published YOLOrtho result (~0.61) is attributable to: (1) the training data subset used (~705 vs. the full ~4,000 image DENTEX training split), (2) the 32-class FDI enumeration task vs. a 4-quadrant quadrant-only formulation in some baselines, and (3) the absence of pre-trained dental-specific backbone weights. ARCHON's architectural improvements (Swin, CrossAttn, CLAHE) are designed to close this gap given sufficient data.
+> The current artifacts narrow the gap to the published YOLOrtho result substantially: ARCHON now reaches roughly 0.50–0.54 mAP50 on the subset-trained runs. The remaining difference to the published ~0.61 still likely reflects the reduced training split, the harder 32-class FDI enumeration setup, and the lack of dental-domain pretraining.
 
 **Figure 7.6 — F1-Confidence Curve: Phase 1 (YOLOrtho-equivalent)**
 
-![Phase 1 F1-Confidence Curve — peak F1=0.14 at confidence 0.059](outputs/content/WILP/outputs/runs/phase1/BoxF1_curve.png)
+![Phase 1 F1-Confidence Curve — peak F1=0.45 at confidence 0.377](outputs/content/WILP/outputs/runs/phase1/BoxF1_curve.png)
 
 **Figure 7.7 — F1-Confidence Curve: ARCHON Full Evaluation**
 
-![ARCHON Eval F1-Confidence Curve — peak F1=0.14 at confidence 0.059](outputs/content/WILP/outputs/runs/eval/BoxF1_curve.png)
+![ARCHON Eval F1-Confidence Curve — peak F1=0.38 at confidence 0.072](outputs/content/WILP/outputs/runs/eval/BoxF1_curve.png)
 
-Both the Phase 1 baseline and the full ARCHON system peak at F1=0.14 at confidence threshold 0.059. This low operating confidence reflects the inherent difficulty of 32-class fine-grained FDI detection: predictions must be made at low confidence thresholds to achieve acceptable recall across all tooth positions.
+The Phase 1 run peaks at F1=0.45 around confidence 0.377, while the unified ARCHON eval peaks at F1=0.38 around confidence 0.072. The lower optimal threshold for the merged checkpoint is consistent with the mild precision-recall shift visible in the eval PR curve.
 
 ---
 
@@ -1658,11 +1658,11 @@ Both the Phase 1 baseline and the full ARCHON system peak at F1=0.14 at confiden
 
 **Phase 3 Training Convergence:**
 
-The hybrid head (Swin Transformer + Cross-Attention + Severity Head) was trained for 50 epochs with the detection backbone frozen. Training loss converged from an initial loss of ~1.63 (epoch 1) to a best loss of **1.3961** at epoch 49, demonstrating stable convergence without oscillation. The frozen backbone ensures no degradation of Phase 1/2 detection quality during hybrid head training.
+The hybrid head (Swin Transformer + Cross-Attention + Severity Head) was trained for 50 epochs with the detection backbone frozen. Training loss converged from **1.9308** at epoch 1 to a best loss of **1.4469** at epoch 42 before ending at **1.4524**, demonstrating stable convergence without large oscillations.
 
 **Disease Attribute Head Convergence (Phase 2b):**
 
-The attribute BCE loss (weighted by pos_weight to compensate class imbalance) converged from ~2.0 (epoch 1) to a best of **0.6110** at epoch 39 out of 50. Post-convergence loss remained in the 0.69–1.24 range, indicating the model found a stable minimum within the 50-epoch budget.
+The attribute BCE loss (weighted by `pos_weight` to compensate class imbalance) converged from **6.3663** at epoch 1 to a best of **2.3907** at epoch 48 out of 50, with the final epoch remaining close at **2.3992**. This indicates gradual but stable optimization on the expanded pseudo-labelled crop set.
 
 **Severity Class Distribution Notes:**
 
@@ -1689,8 +1689,8 @@ Given the severely imbalanced disease counts (Lesion: 3 positives; Impaction: 22
 | YOLOv5 baseline | ~0.43* | ~0.48* | No | No | ~45 |
 | YOLOrtho (Mei et al.) | ~0.61* | ~0.59* | No | No | ~32 |
 | Ensemble FRCNN+Swin | ~0.63* | ~0.61* | No | Partial | ~2 |
-| **ARCHON Phase 1 (this work, DENTEX subset)** | **0.1455** | — | No | No | ~26 |
-| **ARCHON Full (this work, DENTEX subset)** | **0.138** | — | **Yes (3-level)** | **Yes (full)** | **~26** |
+| **ARCHON Phase 1 (this work, DENTEX subset)** | **0.5128** | — | No | No | ~26 |
+| **ARCHON Full (this work, DENTEX subset)** | **0.499** | — | **Yes (3-level)** | **Yes (full)** | **~26** |
 
 > *Published figures from the respective papers, trained on the full DENTEX/comparable dataset. ARCHON's lower mAP50 is a function of training data volume (subset vs. full split) and not an architectural limitation. The architectural advantage of ARCHON—Swin global context, cross-attention fusion, and severity grading—are all validated to be active and functional in the trained model.
 
@@ -1705,7 +1705,7 @@ The following ablation study isolates the contribution of each ARCHON architectu
 | Configuration | mAP50 | Disease Macro-F1 | FDI Accuracy | Midline Swap Rate |
 |---|---|---|---|---|
 | YOLOrtho (full baseline, published) | ~0.61† | ~0.59† | ~87.4%† | ~8.2%† |
-| ARCHON Phase 1 (YOLOrtho-equiv, this work) | 0.1455 | — | — | — |
+| ARCHON Phase 1 (YOLOrtho-equiv, this work) | 0.5128 | — | — | — |
 | + Swin GlobalContextEncoder (A) | — | — | +1.7pp† | −1.9pp† |
 | + Cross-Attention Fusion (A+B) | — | +2pp† | +0.2pp† | −0.2pp† |
 | + Severity Head (A+B+C) | — | +1pp† | — | — |
@@ -1713,9 +1713,9 @@ The following ablation study isolates the contribution of each ARCHON architectu
 | + Quad Penalty (A+B+C+D+E) = **Full ARCHON** | — | — | — | −1.2pp† |
 
 **Key Findings (validated by component training logs):**
-- **Phase 3 hybrid loss convergence** (1.63 → 1.3961) confirms the Swin+CrossAttn+Severity components train successfully and converge without destabilising the frozen detection backbone.
-- **Attribute head convergence** (BCE best=0.6110) confirms the four disease attribute binary classifiers learn a non-trivial signal despite severe class imbalance.
-- **Frozen backbone design** is validated: Phase 2 mAP50 at epoch 1 (0.1475) equals Phase 1 best (0.1455), confirming detection quality is preserved during Phase 2b and Phase 3 training.
+- **Phase 3 hybrid loss convergence** (1.9308 → 1.4469) confirms the Swin+CrossAttn+Severity components train successfully while the detection backbone remains frozen.
+- **Attribute head convergence** (BCE best=2.3907) confirms the four disease attribute binary classifiers learn a non-trivial signal despite severe imbalance and capped class weights.
+- **Frozen backbone design** is validated: the unified eval remains close to the standalone detector results (0.499 eval vs. 0.503 phase2 PR / 0.5128 phase1 best), confirming that later stages do not catastrophically regress detection quality.
 
 ---
 
@@ -1727,11 +1727,11 @@ The following ablation study isolates the contribution of each ARCHON architectu
 | FLOPs (1280×640) | ~187 GFLOPs | ~215 GFLOPs | +15% |
 | GPU Memory (batch=4) | ~7.8 GB | ~9.4 GB | +21% |
 | Inference time (T4) | ~31 ms | ~38 ms | +23% |
-| Phase 1 training time (100 ep, T4) | — | ~51 min | — |
-| Phase 2 training time (53 ep, T4) | — | ~30 min | — |
-| Phase 2b attr head (50 ep, T4) | — | ~8 min | — |
-| Phase 3 hybrid head (50 ep, T4) | — | ~16 min | — |
-| **Total end-to-end pipeline** | — | **~105 min** | — |
+| Phase 1 training time (100 ep, logged run) | — | ~61.5 min | — |
+| Phase 2 training time (53 ep, logged run) | — | ~63.7 min | — |
+| Phase 2b attr head (50 ep, logged run) | — | ~37.6 min | — |
+| Phase 3 hybrid head (50 ep, logged run) | — | ~98.9 min | — |
+| **Total end-to-end pipeline** | — | **~261.7 min (~4h 22m)** | — |
 
 The Phase 3 hybrid components add approximately 15–20% computational overhead. For clinical deployment where processing 10–20 X-rays per session is typical, the ~7 ms additional inference latency per image is clinically negligible.
 
@@ -1803,16 +1803,120 @@ Tooth 46 (Lower Right First Molar):      conf=0.55, Healthy
 
 | Metric | Value | Source |
 |---|---|---|
-| Phase 1 best mAP@0.5 | **0.1455** (epoch 65/100) | results.csv |
-| Phase 1 best mAP@0.5:0.95 | **0.0896** | results.csv |
-| Phase 1 best Precision | **0.2268** | results.csv |
-| Phase 1 best Recall | **0.2824** | results.csv |
-| Phase 2 detection backbone mAP@0.5 | **0.1475** (epoch 1) | results.csv |
-| ARCHON full eval mAP@0.5 | **0.138** | eval/BoxPR_curve |
-| ARCHON full eval peak F1 | **0.14** @ conf=0.059 | eval/BoxF1_curve |
-| Attribute head best BCE loss | **0.6110** (epoch 39/50) | archon.log |
-| Hybrid head best loss | **1.3961** (epoch 49/50) | archon.log |
-| Total training time (all phases) | **~105 minutes** (T4 GPU) | archon.log timestamps |
+| Phase 1 best mAP@0.5 | **0.5128** (epoch 55/100) | outputs/runs/phase1/results.csv |
+| Phase 1 best mAP@0.5:0.95 | **0.3415** | outputs/runs/phase1/results.csv |
+| Phase 1 best Precision | **0.5292** | outputs/runs/phase1/results.csv |
+| Phase 1 best Recall | **0.5171** | outputs/runs/phase1/results.csv |
+| Phase 2 detection backbone mAP@0.5 | **0.5373** (epoch 5/53) | outputs/runs/phase2/results.csv |
+| ARCHON full eval mAP@0.5 | **0.499** | outputs/runs/eval/BoxPR_curve |
+| ARCHON full eval peak F1 | **0.38** @ conf=0.072 | outputs/runs/eval/BoxF1_curve |
+| Attribute head best BCE loss | **2.3907** (epoch 48/50) | config/celloutputlog.txt |
+| Hybrid head best loss | **1.4469** (epoch 42/50) | config/celloutputlog.txt |
+| Total training time (all phases) | **~261.7 minutes (~4h 22m)** | phase results.csv + config/celloutputlog.txt timestamps |
+
+---
+
+## 7.10 Threshold Calibration: Detection Confidence vs Attribute Threshold
+
+To make deployment behavior explicit, six operating points were evaluated from the validation reports in `validation_test/` with fixed IoU threshold 0.45:
+
+- Detection confidence threshold (`conf`): controls whether a tooth detection is accepted.
+- Attribute threshold (`attr`): controls whether a disease attribute logit is converted to a positive disease flag.
+
+### Tested Operating Points
+
+| Config | conf | attr | Tooth Recall | Tooth Precision | Disease Recall | Disease Precision |
+|---|---|---|---|---|---|---|
+| A | 0.05 | 0.05 | 89.75% | 78.29% | 91.54% | 19.97% |
+| B | 0.05 | 0.10 | 89.75% | 78.29% | 70.84% | 57.37% |
+| C | 0.08 | 0.05 | 85.19% | 85.19% | 86.99% | 21.75% |
+| **D (recommended)** | **0.15** | **0.08** | **75.03%** | **92.38%** | **69.24%** | **53.34%** |
+| E | 0.20 | 0.12 | 67.04% | 94.49% | 43.91% | 69.69% |
+| F | 0.25 | 0.20 | 56.45% | 95.93% | 18.10% | 80.95% |
+
+### Graphical Comparison (Validation Set)
+
+```mermaid
+xychart-beta
+  title "Disease Recall vs Precision across Threshold Pairs"
+  x-axis [A:0.05/0.05, B:0.05/0.10, C:0.08/0.05, D:0.15/0.08, E:0.20/0.12, F:0.25/0.20]
+  y-axis "Percent" 0 --> 100
+  bar "Disease Recall" [91.54, 70.84, 86.99, 69.24, 43.91, 18.10]
+  bar "Disease Precision" [19.97, 57.37, 21.75, 53.34, 69.69, 80.95]
+```
+
+```mermaid
+xychart-beta
+  title "False Positives vs Threshold Pair"
+  x-axis [A:0.05/0.05, B:0.05/0.10, C:0.08/0.05, D:0.15/0.08, E:0.20/0.12, F:0.25/0.20]
+  y-axis "Count" 0 --> 13000
+  bar "Tooth FP" [872, 872, 519, 217, 137, 84]
+  bar "Disease FP" [12833, 1841, 10946, 2119, 668, 149]
+```
+
+### Why conf=0.15 and attr=0.08 is Recommended
+
+The selected pair is **not** the maximum-recall point; it is the best **clinical-operating compromise** for this system.
+
+1. It keeps tooth precision high (92.38%), reducing incorrect anatomical highlights.
+2. It preserves practical disease sensitivity (69.24% recall) while avoiding the extreme false-positive regime of low-threshold settings.
+3. Compared with very permissive settings (A/C), disease false positives are reduced by a large margin, limiting alert fatigue.
+4. Compared with very strict settings (E/F), it avoids severe disease under-calling.
+5. It aligns with assistive workflow design: prioritize trustworthy prompts while still surfacing a substantial fraction of abnormal findings.
+
+**Decision rule used in this thesis:** choose the configuration that minimizes false-alarm burden while maintaining acceptable dual-task sensitivity (tooth + disease) for radiologist-in-the-loop review.
+
+---
+
+## 7.11 Qualitative Inference vs Ground Truth (Combined Views)
+
+The following combined images (ground truth + model inference in one panel) are taken from `demo_images_combined/` and correspond to validation under the recommended setting (`conf=0.15`, `attr=0.08`).
+
+### Example 1: Multi-tooth perfect match
+
+![Combined GT vs Inference: train_23](demo_images_combined/combined_train_23.png)
+
+| Item | Value |
+|---|---|
+| Image ID | train_23.png |
+| Teeth | GT=3, Pred=3, TP=3, FP=0, FN=0 |
+| Disease labels | GT=3, Pred=3, TP=3, FP=0, FN=0 |
+| Notes | Correct FDI set match: FDI16, FDI26, FDI28 |
+
+### Example 2: Single-tooth disease case
+
+![Combined GT vs Inference: train_111](demo_images_combined/combined_train_111.png)
+
+| Item | Value |
+|---|---|
+| Image ID | train_111.png |
+| Teeth | GT=1, Pred=1, TP=1, FP=0, FN=0 |
+| Disease labels | GT=1, Pred=1, TP=1, FP=0, FN=0 |
+| Notes | Correct localization and disease tagging for FDI36 |
+
+### Example 3: Posterior tooth case
+
+![Combined GT vs Inference: train_331](demo_images_combined/combined_train_331.png)
+
+| Item | Value |
+|---|---|
+| Image ID | train_331.png |
+| Teeth | GT=1, Pred=1, TP=1, FP=0, FN=0 |
+| Disease labels | GT=1, Pred=1, TP=1, FP=0, FN=0 |
+| Notes | Correct posterior identification (FDI48) with no spillover detections |
+
+### Example 4: Two-tooth cross-quadrant case
+
+![Combined GT vs Inference: train_690](demo_images_combined/combined_train_690.png)
+
+| Item | Value |
+|---|---|
+| Image ID | train_690.png |
+| Teeth | GT=2, Pred=2, TP=2, FP=0, FN=0 |
+| Disease labels | GT=2, Pred=2, TP=2, FP=0, FN=0 |
+| Notes | Correct detection and labeling for FDI16 and FDI37 |
+
+Across these curated examples, the model shows exact GT alignment for both detection and disease tagging. These qualitative snapshots complement the aggregate threshold tables by showing that the recommended operating point yields clean overlays in representative easy-to-moderate cases.
 
 ---
 

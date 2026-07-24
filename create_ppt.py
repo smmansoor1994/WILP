@@ -688,28 +688,28 @@ phases = [
       "Dataset: Parts 1+2+3 (all training)",
       "Loss: YOLOv8 bbox + cls + DFL",
       "Output: weights/best.pt",
-      "Result: mAP50 = 0.1455 (epoch 65)"],
+    "Result: mAP50 = 0.5128 (epoch 55)"],
      MID_BLUE),
     ("Phase 2", "Full Fine-tuning + Pseudo Labels",
-     ["100 epochs  •  SGD  •  lr=0.002",
+     ["53 epochs  •  SGD  •  lr=0.002",
       "Dataset: P1+P2+P3 + pseudo-labelled",
       "Loss: Detection + Attr BCE (masked by data_type)",
       "Output: weights/attr_best.pt",
-      "Result: mAP50 = 0.1475 (epoch 1 best)"],
+    "Result: mAP50 = 0.5373 (epoch 5 best)"],
      ORANGE),
     ("Phase 2b", "Attribute Head Fine-tuning",
      ["50 epochs  •  Backbone frozen",
       "Dataset: Part 3 only (data_type=2)",
       "Loss: Attribute BCE ×4 diseases",
       "Output: updated attr heads",
-      "BCE best: 0.6110 (epoch 39)"],
+    "BCE best: 2.3907 (epoch 48)"],
      ACCENT_TEAL),
     ("Phase 3", "Hybrid Architecture Training",
      ["50 epochs  •  AdamW  •  lr=5e-4",
       "Frozen: backbone + attr heads",
       "Trainable: Swin + CrossAttn + SeverityHead",
       "Loss: attr(4.0)+sev(4.0)+quad(1.0)",
-      "Hybrid loss: 1.3961 (epoch 49)"],
+    "Hybrid loss: 1.4469 (epoch 42)"],
      GREEN),
 ]
 for i, (phase, name, items, col) in enumerate(phases):
@@ -794,7 +794,7 @@ for i, row in enumerate(h3_rows):
 
 add_textbox(slide,
     "Class imbalance correction: pos_weight per attribute\n"
-    "  Impaction ~15% → w=5.0  |  Caries ~25% → w=3.0  |  Deep caries ~8% → w=8.0  |  Lesion ~15% → w=5.0",
+    "  Impaction: w=20.0  |  Caries: w=12.2  |  Deep caries: w=20.0  |  Lesion: w=20.0",
     Inches(0.3), Inches(6.25), Inches(12.5), Inches(0.65),
     font_size=11.5, italic=True, color=MID_BLUE)
 
@@ -805,7 +805,7 @@ add_textbox(slide,
 slide = prs.slides.add_slide(blank_layout)
 add_bg(slide, LIGHT_GRAY)
 title_bar(slide, "Results: Phase 1 Training — Detection Learning Curves",
-          "100 epochs · 705 training images · NVIDIA T4 GPU · ~51 minutes")
+          "100 epochs · 705 training images · logged run · ~61.5 minutes")
 
 safe_add_image(slide,
     str(PHASE1_DIR / "results.png"),
@@ -818,11 +818,11 @@ add_textbox(slide, "Key Observations",
             Inches(8.4), Inches(1.4), Inches(4.4), Inches(0.38),
             font_size=13, bold=True, color=DARK_BLUE)
 obs = [
-    ("mAP50 = 0.1455", "Best at epoch 65 / 100", MID_BLUE),
-    ("mAP50-95 = 0.0896", "Strict IoU-averaged metric", ACCENT_TEAL),
-    ("Precision = 0.2268", "At optimal threshold", GREEN),
-    ("Recall = 0.2824", "At optimal threshold", ORANGE),
-    ("Peak F1 = 0.14", "At conf = 0.059", RED),
+    ("mAP50 = 0.5128", "Best at epoch 55 / 100", MID_BLUE),
+    ("mAP50-95 = 0.3415", "Strict IoU-averaged metric", ACCENT_TEAL),
+    ("Precision = 0.5292", "At best mAP epoch", GREEN),
+    ("Recall = 0.5171", "At best mAP epoch", ORANGE),
+    ("Peak F1 = 0.45", "At conf = 0.377", RED),
 ]
 for i, (metric, note, col) in enumerate(obs):
     y_r = Inches(1.9 + i * 0.95)
@@ -833,8 +833,8 @@ for i, (metric, note, col) in enumerate(obs):
                 Inches(4.2), Inches(0.3), font_size=10.5, italic=True, color=WHITE)
 
 add_textbox(slide,
-    "Note: 32-class FDI enumeration inherently yields lower absolute mAP\n"
-    "vs binary detectors — FDI 36 detected as 37 = miss despite correct localisation.",
+    "Note: 32-class FDI enumeration remains harder than binary detection,\n"
+    "but the current run reaches >0.50 mAP50 while preserving fine-grained FDI assignment.",
     Inches(8.4), Inches(6.75), Inches(4.4), Inches(0.6),
     font_size=9.5, italic=True, color=DARK_GRAY)
 
@@ -857,12 +857,12 @@ add_textbox(slide, "Phase 2 Analysis",
             Inches(8.4), Inches(1.4), Inches(4.4), Inches(0.38),
             font_size=13, bold=True, color=DARK_BLUE)
 add_bullet_box(slide,
-    ["mAP50 peaks at epoch 1 = 0.1475 (Phase 1 inherited)",
+    ["mAP50 peaks at epoch 5 = 0.5373 before late-epoch overfitting",
      "Validation loss increases monotonically → overfitting on ~173 val images",
      "Smaller Part-3 disease-annotated subset vs full Phase 1 data",
-     "Best detection checkpoint = epoch 1 saved → used in archon_best.pt",
-     "Attribute BCE best loss = 0.6110 at epoch 39/50 (Phase 2b)",
-     "Periapical lesion: 3 pos vs 170 neg → pos_weight=20 applied"],
+     "Best detection checkpoint = saved early best.pt → used in archon_best.pt",
+     "Attribute BCE best loss = 2.3907 at epoch 48/50 (Phase 2b)",
+     "Current attr weights: [20.0, 12.2, 20.0, 20.0] from expanded crop set"],
     Inches(8.4), Inches(1.85), Inches(4.4), Inches(4.5),
     font_size=11, color=DARK_GRAY, bullet="▸")
 add_textbox(slide,
@@ -1097,9 +1097,9 @@ add_textbox(slide, "Phase 3 Training Convergence",
             Inches(0.4), Inches(1.45), Inches(5.2), Inches(0.38),
             font_size=13, bold=True, color=ACCENT_TEAL)
 add_textbox(slide,
-    "Initial loss (epoch 1):   1.63\n"
-    "Best loss (epoch 49/50):  1.3961\n"
-    "Final loss (epoch 50):    1.4167\n\n"
+    "Initial loss (epoch 1):   1.9308\n"
+    "Best loss (epoch 42/50):  1.4469\n"
+    "Final loss (epoch 50):    1.4524\n\n"
     "Smooth convergence — no loss spikes\n"
     "CosineAnnealingLR stable throughout",
     Inches(0.4), Inches(1.9), Inches(5.2), Inches(1.55),
@@ -1111,8 +1111,8 @@ add_textbox(slide, "Attribute Head Convergence (Phase 2b)",
             Inches(6.1), Inches(1.45), Inches(6.7), Inches(0.38),
             font_size=13, bold=True, color=WHITE)
 add_textbox(slide,
-    "BCE best: 0.6110 at epoch 39 / 50\n"
-    "Lesion: only 3 pos vs 170 neg → pos_weight=20\n"
+    "BCE best: 2.3907 at epoch 48 / 50\n"
+    "Positives: [120, 398, 107, 31] with capped pos_weight=20 where needed\n"
     "Convergence validates that disease signal learned despite severe imbalance",
     Inches(6.1), Inches(1.9), Inches(6.7), Inches(1.55),
     font_size=12, color=WHITE)
@@ -1175,7 +1175,7 @@ comp_rows_data = [
     ("YOLOv5 baseline", "~0.43*", "~0.48*", "No", "No", "Yes (~45 FPS)", DARK_GRAY),
     ("YOLOrtho (Mei et al.)", "~0.61*", "~0.59*", "No", "No", "Yes (~32 FPS)", MID_BLUE),
     ("Ensemble FRCNN+Swin", "~0.63*", "~0.61*", "No", "Partial", "No (~2 FPS)", DARK_GRAY),
-    ("ARCHON Full (this work)", "0.138†", "—", "Yes (3-level)", "Yes (Swin)", "Yes (~26 FPS)", GREEN),
+    ("ARCHON Full (this work)", "0.499†", "—", "Yes (3-level)", "Yes (Swin)", "Yes (~26 FPS)", GREEN),
 ]
 col_xw2 = [(Inches(0.3), Inches(3.1)), (Inches(3.45), Inches(1.3)), (Inches(4.8), Inches(1.5)),
            (Inches(6.35), Inches(1.6)), (Inches(8.0), Inches(1.8)), (Inches(9.85), Inches(1.9))]
@@ -1198,7 +1198,7 @@ for i, row in enumerate(comp_rows_data):
                     font_size=10.5, color=font_col, bold=(bg_col == GREEN), align=PP_ALIGN.CENTER)
 
 add_textbox(slide,
-    "* Published figures on full DENTEX dataset. ARCHON's lower mAP50 (0.138) reflects training on "
+    "* Published figures on full DENTEX dataset. ARCHON's lower mAP50 (0.499) reflects training on "
     "705-image subset vs ~4,000+ images.\n"
     "† ARCHON is the ONLY method providing 3-level severity grading + full arch context in a single unified model.",
     Inches(0.3), Inches(6.2), Inches(12.5), Inches(0.58),
@@ -1216,12 +1216,12 @@ title_bar(slide, "Ablation Study — Contribution of Each ARCHON Improvement",
 abl_headers = ["Configuration", "mAP50", "Disease\nMacro-F1", "FDI Acc.", "Midline\nSwap Rate"]
 abl_rows = [
     ("YOLOrtho (full baseline, published)", "~0.61†", "~0.59†", "~87.4%†", "~8.2%†", MID_BLUE),
-    ("ARCHON Phase 1 (this work)", "0.1455", "—", "—", "—", DARK_GRAY),
+    ("ARCHON Phase 1 (this work)", "0.5128", "—", "—", "—", DARK_GRAY),
     ("+ A: Swin GlobalContextEncoder", "—", "—", "+1.7pp†", "−1.9pp†", ACCENT_TEAL),
     ("+ B: Cross-Attention Fusion (A+B)", "—", "+2pp†", "+0.2pp†", "−0.2pp†", ORANGE),
     ("+ C: Severity Head (A+B+C)", "—", "+1pp†", "—", "—", GREEN),
     ("+ D: CLAHE Augmentation (A+B+C+D)", "—", "+1pp†", "+0.1pp†", "−0.1pp†", MID_BLUE),
-    ("+ E: Quad Penalty = Full ARCHON", "0.138", "+4pp† cumul.", "+2pp† cumul.", "−3.4pp† cumul. (−41%)", RED),
+    ("+ E: Quad Penalty = Full ARCHON", "0.499", "+4pp† cumul.", "+2pp† cumul.", "−3.4pp† cumul. (−41%)", RED),
 ]
 col_xw3 = [(Inches(0.3), Inches(5.2)), (Inches(5.55), Inches(1.3)), (Inches(6.9), Inches(1.6)),
            (Inches(8.55), Inches(1.65)), (Inches(10.25), Inches(2.6))]
@@ -1242,7 +1242,7 @@ for i, row in enumerate(abl_rows):
                     font_size=10, color=fnt_col, bold=last, align=PP_ALIGN.CENTER if j > 0 else PP_ALIGN.LEFT)
 
 add_textbox(slide,
-    "Phase 3 hybrid loss: 1.63 (epoch 1) → 1.3961 (epoch 49) — confirms Swin+CrossAttn+Severity converge without backbone regression.",
+    "Phase 3 hybrid loss: 1.9308 (epoch 1) → 1.4469 (epoch 42) — confirms Swin+CrossAttn+Severity converge without backbone regression.",
     Inches(0.3), Inches(6.65), Inches(12.5), Inches(0.35),
     font_size=10, italic=True, color=DARK_GRAY, align=PP_ALIGN.CENTER)
 
@@ -1283,11 +1283,11 @@ add_textbox(slide, "Training Time Breakdown (NVIDIA T4 GPU)",
             Inches(0.3), Inches(4.35), Inches(12.5), Inches(0.38),
             font_size=14, bold=True, color=DARK_BLUE)
 train_times = [
-    ("Phase 1\n100 epochs", "~51 min", MID_BLUE),
-    ("Phase 2\n53 epochs", "~30 min", ORANGE),
-    ("Phase 2b\n50 epochs", "~8 min", ACCENT_TEAL),
-    ("Phase 3\n50 epochs", "~16 min", GREEN),
-    ("TOTAL", "~105 min", DARK_BLUE),
+    ("Phase 1\n100 epochs", "~61.5 min", MID_BLUE),
+    ("Phase 2\n53 epochs", "~63.7 min", ORANGE),
+    ("Phase 2b\n50 epochs", "~37.6 min", ACCENT_TEAL),
+    ("Phase 3\n50 epochs", "~98.9 min", GREEN),
+    ("TOTAL", "~261.7 min", DARK_BLUE),
 ]
 for i, (label, time, col) in enumerate(train_times):
     x = Inches(0.3 + i * 2.55)
@@ -1313,16 +1313,16 @@ title_bar(slide, "Summary of Key Quantitative Results",
           "All metrics derived from actual training runs on DENTEX 2023 subset — NVIDIA T4 GPU")
 
 results_data = [
-    ("Phase 1 best mAP@0.5", "0.1455", "epoch 65/100", MID_BLUE),
-    ("Phase 1 best mAP@0.5:0.95", "0.0896", "epoch 65/100", MID_BLUE),
-    ("Phase 1 Precision", "0.2268", "optimal threshold", MID_BLUE),
-    ("Phase 1 Recall", "0.2824", "optimal threshold", MID_BLUE),
-    ("Phase 2 detection backbone mAP@0.5", "0.1475", "epoch 1 (best saved)", ORANGE),
-    ("ARCHON full eval mAP@0.5", "0.138", "archon_best.pt", GREEN),
-    ("ARCHON full eval peak F1", "0.14 @ conf=0.059", "eval run", GREEN),
-    ("Attribute head best BCE loss", "0.6110", "epoch 39 / 50", ACCENT_TEAL),
-    ("Hybrid head best loss", "1.3961", "epoch 49 / 50", ACCENT_TEAL),
-    ("Total training time", "~105 minutes", "all phases, T4 GPU", DARK_BLUE),
+    ("Phase 1 best mAP@0.5", "0.5128", "epoch 55/100", MID_BLUE),
+    ("Phase 1 best mAP@0.5:0.95", "0.3415", "epoch 55/100", MID_BLUE),
+    ("Phase 1 Precision", "0.5292", "best mAP epoch", MID_BLUE),
+    ("Phase 1 Recall", "0.5171", "best mAP epoch", MID_BLUE),
+    ("Phase 2 detection backbone mAP@0.5", "0.5373", "epoch 5 (best saved)", ORANGE),
+    ("ARCHON full eval mAP@0.5", "0.499", "archon_best.pt", GREEN),
+    ("ARCHON full eval peak F1", "0.38 @ conf=0.072", "eval run", GREEN),
+    ("Attribute head best BCE loss", "2.3907", "epoch 48 / 50", ACCENT_TEAL),
+    ("Hybrid head best loss", "1.4469", "epoch 42 / 50", ACCENT_TEAL),
+    ("Total training time", "~261.7 minutes", "all phases, logged run", DARK_BLUE),
 ]
 for i, (metric, value, source, col) in enumerate(results_data):
     y_r = Inches(1.38 + i * 0.58)

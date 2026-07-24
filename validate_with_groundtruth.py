@@ -169,9 +169,9 @@ def get_predictor() -> ARCHONHybridPredictor:
         predictor = ARCHONHybridPredictor(
             weights_path=str(WEIGHTS),
             device="cpu",
-            conf_threshold=0.25,
+            conf_threshold=0.15,
             iou_threshold=0.45,
-            attr_threshold=0.20,
+            attr_threshold=0.08,
         )
         THREAD_LOCAL.predictor = predictor
     return predictor

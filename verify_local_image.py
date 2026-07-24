@@ -7,6 +7,7 @@ ARCHON model and display results.
 Usage (single unified weights file):
     python verify_local_image.py --image path/to/xray.jpg
     python verify_local_image.py --image path/to/xray.jpg --weights path/to/archon_best.pt
+    python verify_local_image.py --image path/to/xray.jpg --weights ./weights --output ./output
     python verify_local_image.py --image path/to/xray.jpg --show
     python verify_local_image.py --image path/to/xray.jpg --save-dir C:/Users/You/Downloads
 
@@ -14,10 +15,11 @@ Usage (single unified weights file):
       - Phase 1+2  detection backbone
       - Phase 2b   disease attribute heads
       - Phase 3    Swin encoder + cross-attention + severity head
-    No --attr-weights or --hybrid-weights flags are needed when using archon_best.pt.
+        A single --weights path/folder is sufficient.
 
 Save outputs:
-    By default, results are saved to outputs/predictions/.
+    By default, results are saved to results/.
+    You may also pass --output ./output (alias of --output-dir).
     Use --save-dir to choose any local folder (e.g. Downloads).
     Use --no-save to skip saving entirely.
 
@@ -26,6 +28,9 @@ Default weight search order:
   2. outputs/runs/phase2/weights/best.pt
   3. outputs/runs/phase1/weights/best.pt
 """
+# python verify_local_image.py --image path\to\your_xray.png --show
+# python verify_local_image.py "D:\WILP\sem-4\Dataset\DENTEX\DENTEX\test_data\disease\input\test_2.png" --show
+
 
 import argparse
 import logging
@@ -60,6 +65,9 @@ def find_weights(override: str = None) -> Path:
     # 1. Explicit --weights argument
     if override:
         p = Path(override)
+        # Support folder-style input: --weights ./weights
+        if p.is_dir():
+            p = p / "archon_best.pt"
         if not p.exists():
             logger.error("Specified weights not found: %s", p)
             sys.exit(1)
@@ -102,19 +110,14 @@ def main():
         help="Path to a panoramic dental X-ray image (.jpg / .png)."
     )
     parser.add_argument(
-        "--weights", default=None,
+           "--weights", default="./weights",
         help="Path to model weights (.pt). Auto-detected if omitted. "
-             "Use the unified archon_best.pt (contains all phases)."
+               "Use the unified archon_best.pt (contains all phases). "
+               "Folder paths are supported (e.g., ./weights)."
     )
     parser.add_argument(
-        "--attr-weights", default=None,
-        help="[DEPRECATED] Separate attr_best.pt path. "
-             "Ignored when --weights points to the unified archon_best.pt, "
-             "which already embeds the attribute heads."
-    )
-    parser.add_argument(
-        "--conf", type=float, default=0.10,
-        help="Detection confidence threshold (default: 0.10). "
+        "--conf", type=float, default=0.15,
+        help="Detection confidence threshold (default: 0.15). "
              "ARCHON has 32 FDI classes so per-class confidence is naturally "
              "lower than binary detectors — use 0.05-0.15 to see all teeth. "
              "Raise toward 0.25 to reduce false positives."
@@ -124,8 +127,8 @@ def main():
         help="NMS IoU threshold (default: 0.45)."
     )
     parser.add_argument(
-        "--attr-threshold", type=float, default=0.3,
-        help="Disease attribute probability threshold (default: 0.3). "
+        "--attr-threshold", type=float, default=0.08,
+        help="Disease attribute probability threshold (default: 0.08). "
              "Lower values increase disease sensitivity."
     )
     parser.add_argument(
@@ -142,12 +145,12 @@ def main():
     parser.add_argument(
         "--save-dir", default=None,
         help="Directory to save annotated image and JSON results. "
-             "Overrides --output-dir. Example: C:/Users/You/Downloads"
+               "Overrides --output. Example: C:/Users/You/Downloads"
     )
     parser.add_argument(
-        "--output-dir", default=str(WILP_DIR / "outputs" / "predictions"),
-        help="Fallback save directory if --save-dir is not set "
-             "(default: outputs/predictions/)."
+           "--output", "--output-dir", dest="output_dir", default=str(WILP_DIR / "results"),
+           help="Fallback save directory if --save-dir is not set "
+               "(default: results/). --output-dir is kept as a backward-compatible alias."
     )
     parser.add_argument(
         "--show", action="store_true",
@@ -156,12 +159,6 @@ def main():
     parser.add_argument(
         "--no-save", action="store_true",
         help="Skip saving output files entirely."
-    )
-    parser.add_argument(
-        "--hybrid-weights", default=None,
-        help="[DEPRECATED] Separate hybrid_best.pt path. "
-             "Ignored when --weights points to the unified archon_best.pt, "
-             "which already embeds the Swin encoder and severity head."
     )
     parser.add_argument(
         "--severity-threshold", type=float, default=0.4,
@@ -205,9 +202,7 @@ def main():
         iou_threshold=args.iou,
         attr_threshold=args.attr_threshold,
         img_size=(640, 1280),
-        attr_weights_path=args.attr_weights,
         attr_inference_mode=args.attr_mode,
-        hybrid_weights_path=args.hybrid_weights,
         severity_threshold=args.severity_threshold,
     )
 
@@ -216,7 +211,6 @@ def main():
 
     # ── Debug: raw YOLO detections before postprocessing ─────────────────────
     if args.debug:
-        import torch
         from src.utils.fdi import class_to_fdi, fdi_to_name
         predictor._load_models()
         raw_results = predictor._det_model.predict(
