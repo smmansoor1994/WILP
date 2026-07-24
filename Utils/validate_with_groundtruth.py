@@ -8,6 +8,12 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Set
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from src.inference.predictor import ARCHONHybridPredictor
 
 logging.basicConfig(
@@ -23,8 +29,8 @@ TEST_IMAGES = [f"train_{i}.png" for i in range(700)]
 
 IMG_DIR = Path(r"D:\WILP\sem-4\Dataset\DENTEX\DENTEX\training_data\quadrant-enumeration-disease\xrays")
 GT_JSON = Path(r"D:\WILP\sem-4\Dataset\DENTEX\DENTEX\training_data\quadrant-enumeration-disease\train_quadrant_enumeration_disease.json")
-WEIGHTS = Path(r"D:\WILP\Workingcode\Baseline\WILP\weights\archon_best.pt")
-OUTPUT_DIR = Path(r"D:\WILP\validation_test")
+WEIGHTS = PROJECT_ROOT / "weights" / "archon_best.pt"
+OUTPUT_DIR = PROJECT_ROOT / "validation_test"
 
 LINE_WIDTH = 100
 

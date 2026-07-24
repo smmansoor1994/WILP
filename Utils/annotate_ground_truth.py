@@ -9,8 +9,6 @@ import json
 import argparse
 from pathlib import Path
 import cv2
-import numpy as np
-from sympy import python
 
 # Annotate a single image
 # python annotate_ground_truth.py "path/to/image.png"
@@ -20,12 +18,12 @@ from sympy import python
 # python annotate_ground_truth.py "D:\WILP\sem-4\Dataset\DENTEX\DENTEX\training_data\quadrant-enumeration-disease\xrays\train_23.png"
 
 # Add project to path
-PROJECT_ROOT = Path(__file__).parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Configuration
 GT_JSON_PATH = r"D:\WILP\sem-4\Dataset\DENTEX\DENTEX\training_data\quadrant-enumeration-disease\train_quadrant_enumeration_disease.json"
-OUTPUT_DIR = r".\results\gt"
+OUTPUT_DIR = str(PROJECT_ROOT / "results" / "gt")
 
 # Quadrant colors (BGR format for OpenCV)
 QUADRANT_COLORS = {

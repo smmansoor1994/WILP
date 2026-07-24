@@ -38,7 +38,7 @@ import sys
 from pathlib import Path
 
 # ── Make sure WILP src is on the path ────────────────────────────────────────
-WILP_DIR = Path(__file__).resolve().parent
+WILP_DIR = Path(__file__).resolve().parent.parent
 if str(WILP_DIR) not in sys.path:
     sys.path.insert(0, str(WILP_DIR))
 
@@ -110,10 +110,10 @@ def main():
         help="Path to a panoramic dental X-ray image (.jpg / .png)."
     )
     parser.add_argument(
-           "--weights", default="./weights",
+         "--weights", default=str(WILP_DIR / "weights"),
         help="Path to model weights (.pt). Auto-detected if omitted. "
-               "Use the unified archon_best.pt (contains all phases). "
-               "Folder paths are supported (e.g., ./weights)."
+              "Use the unified archon_best.pt (contains all phases). "
+              "Folder paths are supported (e.g., ./weights)."
     )
     parser.add_argument(
         "--conf", type=float, default=0.15,
@@ -145,12 +145,12 @@ def main():
     parser.add_argument(
         "--save-dir", default=None,
         help="Directory to save annotated image and JSON results. "
-               "Overrides --output. Example: C:/Users/You/Downloads"
+             "Overrides --output. Example: C:/Users/You/Downloads"
     )
     parser.add_argument(
-           "--output", "--output-dir", dest="output_dir", default=str(WILP_DIR / "results"),
-           help="Fallback save directory if --save-dir is not set "
-               "(default: results/). --output-dir is kept as a backward-compatible alias."
+        "--output", "--output-dir", dest="output_dir", default=str(WILP_DIR / "results"),
+        help="Fallback save directory if --save-dir is not set "
+             "(default: results/). --output-dir is kept as a backward-compatible alias."
     )
     parser.add_argument(
         "--show", action="store_true",
