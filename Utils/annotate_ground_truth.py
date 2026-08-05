@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-Annotate ground truth bounding boxes from COCO JSON on input image and save to results/gt.
+Annotate ground truth bounding boxes from COCO JSON on an input image.
+
+Usage:
+    python annotate_ground_truth.py --image path/to/image.png
+    python annotate_ground_truth.py --image path/to/image.png --output-dir ./custom_output
+    python annotate_ground_truth.py --image path/to/image.png --show
 """
 
 import os
@@ -9,13 +14,14 @@ import json
 import argparse
 from pathlib import Path
 import cv2
+import matplotlib.pyplot as plt
 
 # Annotate a single image
-# python annotate_ground_truth.py "path/to/image.png"
+# python annotate_ground_truth.py --image "path/to/image.png"
 
-# Or specify custom output directory
-# python annotate_ground_truth.py "path/to/image.png" --output-dir "./custom_output"
-# python annotate_ground_truth.py "D:\WILP\sem-4\Dataset\DENTEX\DENTEX\training_data\quadrant-enumeration-disease\xrays\train_23.png"
+# Or specify custom output directory / preview window
+# python annotate_ground_truth.py --image "path/to/image.png" --output-dir "./custom_output"
+# python annotate_ground_truth.py --image "D:\WILP\sem-4\Dataset\DENTEX\DENTEX\training_data\quadrant-enumeration-disease\xrays\train_23.png" --show
 
 # Add project to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -163,11 +169,12 @@ def main():
     
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Annotate ground truth from COCO JSON")
-    parser.add_argument("input_image", help="Path to input image file")
+    parser.add_argument("--image", required=True, help="Path to input image file")
     parser.add_argument("--output-dir", default=OUTPUT_DIR, help="Output directory (default: ./results/gt)")
+    parser.add_argument("--show", action="store_true", help="Display the annotated image in a window")
     args = parser.parse_args()
     
-    input_image_path = args.input_image
+    input_image_path = args.image
     output_dir = args.output_dir
     
     # Validate input image
@@ -206,6 +213,19 @@ def main():
         if success:
             print(f"[OK] {message}")
             print(f"[OK] Result saved: {output_image_path}\n")
+
+            if args.show:
+                preview = cv2.imread(output_image_path)
+                if preview is None:
+                    print("[WARN] Could not load saved image for display")
+                else:
+                    preview_rgb = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
+                    plt.figure(figsize=(16, 8))
+                    plt.imshow(preview_rgb)
+                    plt.title(f"Ground Truth Annotation - {image_name}")
+                    plt.axis("off")
+                    plt.tight_layout()
+                    plt.show()
         else:
             print(f"[ERROR] {message}\n")
     

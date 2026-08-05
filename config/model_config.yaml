@@ -54,7 +54,7 @@ model:
   #   B. MultiScaleFusion      — Cross-Attention: CNN local + Swin global
   #   C. HybridMultiTaskHead   — 3-level severity + quadrant auxiliary head
   # Requires Phase 3 training (--mode train_hybrid after baseline --mode train)
-  use_hybrid: false  # set true to activate during training and inference
+  use_hybrid: true  # set true to activate during training and inference
 
   # Swin Transformer settings (GlobalContextEncoder)
   # Operates on P5 feature map: 20×40 for 640×1280 input at stride 32
