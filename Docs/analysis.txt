@@ -1,0 +1,75 @@
+===================================================================
+Model 1:Archon -improvemnts-100-precision  Branch: Archon-improvemnts
+===================================================================
+📊 TOOTH DETECTION METRICS
+  Ground Truth Teeth:  56
+  Predicted Teeth:     71
+  True Positives (TP): 53
+  False Positives:     18
+  False Negatives:     3
+  Recall (Sensitivity): 94.6% (53/56)
+  Precision: 74.6% (53/71)
+
+🦷 DISEASE DETECTION METRICS
+  Ground Truth Diseases: 56
+  Predicted Diseases:    148
+  True Positives (TP):   36
+  False Positives:       112
+  False Negatives:       20
+  Recall (Sensitivity): 64.3% (36/56)
+  Precision: 24.3% (36/148)
+
+
+2026-07-06 11:12:53 [INFO] archon.main —   mAP50: 0.5094
+2026-07-06 11:12:53 [INFO] archon.main —   mAP50-95: 0.2945
+
+
+
+=====================================================================
+Model-2:Archon-100-improved-main		 Branch: Archon-improvemnts
+=====================================================================
+📊 TOOTH DETECTION METRICS
+  Ground Truth Teeth:  56
+  Predicted Teeth:     71
+  True Positives (TP): 53
+  False Positives:     18
+  False Negatives:     3
+  Recall (Sensitivity): 94.6% (53/56)
+  Precision: 74.6% (53/71)
+
+🦷 DISEASE DETECTION METRICS
+  Ground Truth Diseases: 56
+  Predicted Diseases:    174
+  True Positives (TP):   40
+  False Positives:       134
+  False Negatives:       16
+  Recall (Sensitivity): 71.4% (40/56)
+  Precision: 23.0% (40/174)
+
+
+2026-07-05 09:28:04 [INFO] archon.main —   mAP50: 0.5094
+2026-07-05 09:28:04 [INFO] archon.main —   mAP50-95: 0.2945
+
+============================================================================
+Model3: Archon -100-main-hybrid    Branch: Archon-main
+============================================================================
+📊 TOOTH DETECTION METRICS
+  Ground Truth Teeth:  56
+  Predicted Teeth:     64
+  True Positives (TP): 49
+  False Positives:     15
+  False Negatives:     7
+  Recall (Sensitivity): 87.5% (49/56)
+  Precision: 76.6% (49/64)
+
+🦷 DISEASE DETECTION METRICS
+  Ground Truth Diseases: 56
+  Predicted Diseases:    69
+  True Positives (TP):   37
+  False Positives:       32
+  False Negatives:       19
+  Recall (Sensitivity): 66.1% (37/56)
+  Precision: 53.6% (37/69)
+
+2026-07-04 11:04:54 [INFO] archon.main —   mAP50: 0.4991
+2026-07-04 11:04:54 [INFO] archon.main —   mAP50-95: 0.2931
