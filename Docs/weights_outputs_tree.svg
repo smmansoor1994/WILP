@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1800" viewBox="0 0 1600 1800">
+  <rect width="1600" height="1800" fill="#f7f9fc"/>
+  <text x="60" y="70" font-family="Consolas, 'Courier New', monospace" font-size="34" font-weight="700" fill="#16324f">Folder Structure: weights and outputs</text>
+
+  <rect x="50" y="110" width="520" height="290" rx="14" fill="#ffffff" stroke="#c8d4e3" stroke-width="2"/>
+  <text x="75" y="155" font-family="Consolas, 'Courier New', monospace" font-size="24" font-weight="700" fill="#1f4e79">weights</text>
+  <text x="75" y="195" font-family="Consolas, 'Courier New', monospace" font-size="20" fill="#22313f" xml:space="preserve">
+    <tspan x="75" dy="0">weights/</tspan>
+    <tspan x="75" dy="30">+-- archon_best.pt</tspan>
+    <tspan x="75" dy="30">+-- attr_best.pt</tspan>
+    <tspan x="75" dy="30">+-- hybrid_best.pt</tspan>
+    <tspan x="75" dy="30">+-- phase1_best.pt</tspan>
+    <tspan x="75" dy="30">+-- phase1_last.pt</tspan>
+    <tspan x="75" dy="30">+-- phase2_best.pt</tspan>
+    <tspan x="75" dy="30">+-- phase2_last.pt</tspan>
+  </text>
+
+  <rect x="50" y="430" width="1500" height="1290" rx="14" fill="#ffffff" stroke="#c8d4e3" stroke-width="2"/>
+  <text x="75" y="475" font-family="Consolas, 'Courier New', monospace" font-size="24" font-weight="700" fill="#1f4e79">outputs</text>
+  <text x="75" y="515" font-family="Consolas, 'Courier New', monospace" font-size="16" fill="#22313f" xml:space="preserve">
+    <tspan x="75" dy="0">outputs/</tspan>
+    <tspan x="75" dy="22">+-- archon.log</tspan>
+    <tspan x="75" dy="22">+-- runs/</tspan>
+    <tspan x="75" dy="22">    +-- eval/</tspan>
+    <tspan x="75" dy="22">    |   +-- BoxF1_curve.png</tspan>
+    <tspan x="75" dy="22">    |   +-- BoxPR_curve.png</tspan>
+    <tspan x="75" dy="22">    |   +-- BoxP_curve.png</tspan>
+    <tspan x="75" dy="22">    |   +-- BoxR_curve.png</tspan>
+    <tspan x="75" dy="22">    |   +-- confusion_matrix.png</tspan>
+    <tspan x="75" dy="22">    |   +-- confusion_matrix_normalized.png</tspan>
+    <tspan x="75" dy="22">    |   +-- val_batch0_labels.jpg, val_batch0_pred.jpg</tspan>
+    <tspan x="75" dy="22">    |   +-- val_batch1_labels.jpg, val_batch1_pred.jpg</tspan>
+    <tspan x="75" dy="22">    |   +-- val_batch2_labels.jpg, val_batch2_pred.jpg</tspan>
+    <tspan x="75" dy="22">    +-- phase1/</tspan>
+    <tspan x="75" dy="22">    |   +-- args.yaml, results.csv, results.png, labels.jpg</tspan>
+    <tspan x="75" dy="22">    |   +-- BoxF1_curve.png, BoxPR_curve.png, BoxP_curve.png, BoxR_curve.png</tspan>
+    <tspan x="75" dy="22">    |   +-- confusion_matrix.png, confusion_matrix_normalized.png</tspan>
+    <tspan x="75" dy="22">    |   +-- train_batch0.jpg, train_batch1.jpg, train_batch2.jpg</tspan>
+    <tspan x="75" dy="22">    |   +-- train_batch15930.jpg, train_batch15931.jpg, train_batch15932.jpg</tspan>
+    <tspan x="75" dy="22">    |   +-- val_batch0_labels.jpg, val_batch0_pred.jpg</tspan>
+    <tspan x="75" dy="22">    |   +-- val_batch1_labels.jpg, val_batch1_pred.jpg</tspan>
+    <tspan x="75" dy="22">    |   +-- val_batch2_labels.jpg, val_batch2_pred.jpg</tspan>
+    <tspan x="75" dy="22">    |   +-- weights/</tspan>
+    <tspan x="75" dy="22">    |       +-- best.pt</tspan>
+    <tspan x="75" dy="22">    |       +-- last.pt</tspan>
+    <tspan x="75" dy="22">    +-- phase2/</tspan>
+    <tspan x="75" dy="22">        +-- args.yaml, results.csv, results.png, labels.jpg</tspan>
+    <tspan x="75" dy="22">        +-- BoxF1_curve.png, BoxPR_curve.png, BoxP_curve.png, BoxR_curve.png</tspan>
+    <tspan x="75" dy="22">        +-- confusion_matrix.png, confusion_matrix_normalized.png</tspan>
+    <tspan x="75" dy="22">        +-- train_batch0.jpg, train_batch1.jpg, train_batch2.jpg</tspan>
+    <tspan x="75" dy="22">        +-- val_batch0_labels.jpg, val_batch0_pred.jpg</tspan>
+    <tspan x="75" dy="22">        +-- val_batch1_labels.jpg, val_batch1_pred.jpg</tspan>
+    <tspan x="75" dy="22">        +-- val_batch2_labels.jpg, val_batch2_pred.jpg</tspan>
+    <tspan x="75" dy="22">        +-- weights/</tspan>
+    <tspan x="75" dy="22">            +-- attr_best.pt</tspan>
+    <tspan x="75" dy="22">            +-- best.pt</tspan>
+    <tspan x="75" dy="22">            +-- hybrid_best.pt</tspan>
+    <tspan x="75" dy="22">            +-- last.pt</tspan>
+  </text>
+</svg>
